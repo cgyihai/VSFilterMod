@@ -19,14 +19,18 @@
  *
  */
 
-#include "stdafx.h"
 #include "STS.h"
-#include <atlbase.h>
-#include <atlconv.h>
-#include <atlstr.h>
-
-#include "RealTextParser.h"
+#include "../compat/vsfm_compat.h"
+#include "../font/font_engine.h"
 #include <fstream>
+
+/* Was in GFN.h, next to the external-subtitle finder. */
+const TCHAR* exttypestr[] =
+{
+    _T(".srt"), _T(".sub"), _T(".smi"), _T(".psb"),
+    _T(".ssa"), _T(".ass"), _T(".idx"), _T(".usf"),
+    _T(".xss"), _T(".rt")
+};
 
 static long revcolor(long c)
 {
@@ -1273,6 +1277,14 @@ double GetFloat(CStringW& buff, char sep = ',') //throw(...)
     return((double)ret);
 }
 
+/* Decodes one [Fonts] attachment (SSA's variant of uuencoding) and registers
+ * it with the glyph engine.
+ *
+ * The original installed the font into the OS -- AddFontMemResourceEx, with a
+ * "write it to %TEMP% and call AddFontResource" fallback. That was Windows
+ * only, mutated machine-wide state, and left the temp file behind. FreeType
+ * can simply be handed the bytes, which also means attached fonts now work
+ * through CSRI, where they never did before. */
 static bool LoadFont(CString& font)
 {
     int len = font.GetLength();
@@ -1304,47 +1316,9 @@ static bool LoadFont(CString& font)
         pData[datalen++] = ((pData[(len&~3)+1] & 15) << 4) | ((pData[(len&~3)+2] >> 2) & 15);
     }
 
-    HANDLE hFont = INVALID_HANDLE_VALUE;
+    if(datalen <= 0) return(false);
 
-    if(HMODULE hModule = LoadLibrary(_T("GDI32.DLL")))
-    {
-        typedef HANDLE(WINAPI * PAddFontMemResourceEx)(IN PVOID, IN DWORD, IN PVOID , IN DWORD*);
-        if(PAddFontMemResourceEx f = (PAddFontMemResourceEx)GetProcAddress(hModule, "AddFontMemResourceEx"))
-        {
-            DWORD cFonts;
-            hFont = f(pData, datalen, NULL, &cFonts);
-        }
-
-        FreeLibrary(hModule);
-    }
-
-    if(hFont == INVALID_HANDLE_VALUE)
-    {
-        TCHAR path[_MAX_PATH];
-        GetTempPath(_MAX_PATH, path);
-
-        DWORD chksum = 0;
-        for(ptrdiff_t i = 0, j = datalen >> 2; i < j; i++)
-            chksum += ((DWORD*)(BYTE*)pData)[i];
-
-        CString fn;
-        fn.Format(_T("%sfont%08x.ttf"), path, chksum);
-
-        CFileStatus	fs;
-        if(!CFileGetStatus(fn, fs))
-        {
-            CFile f;
-            if(f.Open(fn, CFile::modeCreate | CFile::modeWrite | CFile::typeBinary | CFile::shareDenyNone))
-            {
-                f.Write(pData, datalen);
-                f.Close();
-            }
-        }
-
-        AddFontResource(fn);
-    }
-
-    return(true);
+    return vsfm::FontEngine::Get().AddMemoryFont((const BYTE*)pData, (size_t)datalen);
 }
 
 static bool LoadUUEFont(CTextFile* file)
@@ -1413,7 +1387,7 @@ bool CSimpleTextSubtitle::LoadEfile(CString& img, CString m_fn)
 
     // load png image
     MOD_PNGIMAGE t_temp;
-    if(t_temp.initImage(pData.m_p, m_fn)) // save path
+    if(t_temp.initImage(pData.m_p, (size_t)datalen, m_fn)) // save path
     {
         mod_images.Add(t_temp);
     }
@@ -1949,25 +1923,7 @@ static bool OpenXombieSub(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
     return(ret.GetCount() > 0);
 }
 
-#include "USFSubtitles.h"
-
-static bool OpenUSF(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet)
-{
-    CString str;
-    while(file->ReadString(str))
-    {
-        if(str.Find(_T("USFSubtitles")) >= 0)
-        {
-            CUSFSubtitles usf;
-            if(usf.Read(file->GetFilePath()) && usf.ConvertToSTS(ret))
-                return(true);
-
-            break;
-        }
-    }
-
-    return(false);
-}
+/* OpenUSF lived here; USF parsing needed MSXML and was dropped. */
 
 static CStringW MPL22SSA(CStringW str)
 {
@@ -2016,7 +1972,6 @@ static bool OpenMPL2(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet)
 
 typedef bool (*STSOpenFunct)(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet);
 
-static bool OpenRealText(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet);
 
 typedef struct
 {
@@ -2035,9 +1990,7 @@ static OpenFunctStruct OpenFuncts[] =
     OpenVPlayer, TIME, EXTSRT,
     OpenSubStationAlpha, TIME, EXTSSA,
     OpenXombieSub, TIME, EXTXSS,
-    OpenUSF, TIME, EXTUSF,
     OpenMPL2, TIME, EXTSRT,
-    OpenRealText, TIME, EXTRT,
 };
 
 static int nOpenFuncts = countof(OpenFuncts);
@@ -2882,7 +2835,7 @@ bool CSimpleTextSubtitle::Open(CString fn, int CharSet, CString name)
 {
     Empty();
 
-    CWebTextFile f;
+    CTextFile f;
     if(!f.Open(fn)) return(false);
 
     fn.Replace('\\', '/');
@@ -2920,10 +2873,11 @@ bool CSimpleTextSubtitle::Open(CTextFile* f, int CharSet, CString name)
         {
             if(GetCount() > 0)
             {
+                /* Used to raise a modal AfxMessageBox. This code now runs on
+                 * Aegisub's render thread and inside batch BDN+XML jobs, where
+                 * a blocking dialog would hang the host. */
                 int n = CountLines(f, pos, f->GetPosition());
-                CString s;
-                s.Format(_T("Syntax error at line %d!\t"), n + 1);
-                AfxMessageBox(s, MB_OK | MB_ICONERROR);
+                TRACE("STS: syntax error at line %d\n", n + 1);
                 Empty();
                 break;
             }
@@ -2946,7 +2900,7 @@ bool CSimpleTextSubtitle::Open(CTextFile* f, int CharSet, CString name)
         MakeIndex(0);
 #endif
 #endif
-        CWebTextFile f2;
+        CTextFile f2;
         if(f2.Open(f->GetFilePath() + _T(".style")))
             OpenSubStationAlpha(&f2, *this, CharSet);
 
@@ -2964,26 +2918,18 @@ bool CSimpleTextSubtitle::Open(CTextFile* f, int CharSet, CString name)
 
 bool CSimpleTextSubtitle::Open(BYTE* data, int len, int CharSet, CString name)
 {
-    TCHAR path[_MAX_PATH];
-    if(!GetTempPath(_MAX_PATH, path)) return(false);
+    /* Parses straight out of the caller's buffer. This used to spool `data`
+     * to a temp file and reopen it, which is what CSRI drives on every single
+     * edit while Aegisub has the script open -- a file create, write, parse
+     * and unlink per keystroke. */
+    if(data == NULL || len <= 0) return(false);
 
-    TCHAR fn[_MAX_PATH];
-    if(!GetTempFileName(path, _T("vs"), 0, fn)) return(false);
+    Empty();
 
-    FILE* tmp = _tfopen(fn, _T("wb"));
-    if(!tmp) return(false);
+    CTextFile f;
+    if(!f.OpenFromMemory(data, (size_t)len, name)) return(false);
 
-    int i = 0;
-    for(; i <= (len - 1024); i += 1024) fwrite(&data[i], 1024, 1, tmp);
-    if(len > i) fwrite(&data[i], len - i, 1, tmp);
-
-    fclose(tmp);
-
-    bool fRet = Open(fn, CharSet, name);
-
-    _tremove(fn);
-
-    return(fRet);
+    return(Open(&f, CharSet, name));
 }
 
 bool CSimpleTextSubtitle::SaveAs(CString fn, exttype et, double fps, CTextFile::enc e)
@@ -3424,9 +3370,7 @@ void STSStyle::operator = (LOGFONT& lf)
 {
     charSet = lf.lfCharSet;
     fontName = lf.lfFaceName;
-    HDC hDC = GetDC(0);
-    fontSize = -MulDiv(lf.lfHeight, 72, GetDeviceCaps(hDC, LOGPIXELSY));
-    ReleaseDC(0, hDC);
+    fontSize = -MulDiv(lf.lfHeight, 72, VSFM_LOGPIXELSY);
 //	fontAngleZ = (float)(1.0*lf.lfEscapement/10);
     fontWeight = lf.lfWeight;
     fItalic = !!lf.lfItalic;
@@ -3438,9 +3382,7 @@ LOGFONTA& operator <<= (LOGFONTA& lfa, STSStyle& s)
 {
     lfa.lfCharSet = s.charSet;
     strncpy_s(lfa.lfFaceName, LF_FACESIZE, CStringA(s.fontName), _TRUNCATE);
-    HDC hDC = GetDC(0);
-    lfa.lfHeight = -MulDiv((int)(s.fontSize + 0.5), GetDeviceCaps(hDC, LOGPIXELSY), 72);
-    ReleaseDC(0, hDC);
+    lfa.lfHeight = -MulDiv((int)(s.fontSize + 0.5), VSFM_LOGPIXELSY, 72);
     lfa.lfWeight = s.fontWeight;
     lfa.lfItalic = s.fItalic ? -1 : 0;
     lfa.lfUnderline = s.fUnderline ? -1 : 0;
@@ -3452,9 +3394,7 @@ LOGFONTW& operator <<= (LOGFONTW& lfw, STSStyle& s)
 {
     lfw.lfCharSet = s.charSet;
     wcsncpy_s(lfw.lfFaceName, LF_FACESIZE, CStringW(s.fontName), _TRUNCATE);
-    HDC hDC = GetDC(0);
-    lfw.lfHeight = -MulDiv((int)(s.fontSize + 0.5), GetDeviceCaps(hDC, LOGPIXELSY), 72);
-    ReleaseDC(0, hDC);
+    lfw.lfHeight = -MulDiv((int)(s.fontSize + 0.5), VSFM_LOGPIXELSY, 72);
     lfw.lfWeight = s.fontWeight;
     lfw.lfItalic = s.fItalic ? -1 : 0;
     lfw.lfUnderline = s.fUnderline ? -1 : 0;
@@ -3528,41 +3468,8 @@ STSStyle& operator <<= (STSStyle& s, CString& style)
     return(s);
 }
 
-static bool OpenRealText(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet)
-{
-    wstring szFile;
-
-    CStringW buff;
-    while(file->ReadString(buff))
-    {
-        buff.Trim();
-        if(buff.IsEmpty()) continue;
-
-        szFile += CStringW(_T("\n")) + buff.GetBuffer();
-    }
-
-    CRealTextParser RealTextParser;
-    if(!RealTextParser.ParseRealText(szFile))
-        return false;
-
-    CRealTextParser::Subtitles crRealText = RealTextParser.GetParsedSubtitles();
-
-    for(map<pair<int, int>, wstring>::const_iterator i = crRealText.m_mapLines.begin();
-        i != crRealText.m_mapLines.end();
-        ++i)
-    {
-        ret.Add(
-            SubRipper2SSA(i->second.c_str(), CharSet),
-            file->IsUnicode(),
-            i->first.first,
-            i->first.second);
-    }
-
-//	std::wofstream wofsOut(L"c:/zzz.srt");
-//	RealTextParser.OutputSRT(wofsOut);
-
-    return(ret.GetCount() > 0);
-}
+/* OpenRealText lived here; the RealText parser was dropped with the other
+ * non-ASS formats. */
 
 #ifdef _VSMOD // patch m003. random text points
 bool MOD_RANDOM::operator == (MOD_RANDOM& mr)
@@ -3599,20 +3506,28 @@ MOD_PNGIMAGE::MOD_PNGIMAGE()
     alpha = 0xFF;
 }
 
-// read embedded graphics
-void png_default_read_edata(png_structp png_ptr, png_bytep data, png_size_t length)
+/* Reader state for a PNG held in memory. libpng 1.6 hides png_struct, so the
+ * old code -- which stashed the cursor directly in png_ptr->io_ptr and never
+ * checked how much was left -- had to be replaced outright. */
+struct MOD_PNGMEMSRC
 {
-    png_size_t check;
+    const BYTE* cur;
+    const BYTE* end;
+};
 
-    if(png_ptr->io_ptr == NULL)
+static void png_read_from_memory(png_structp png_ptr, png_bytep data, png_size_t length)
+{
+    MOD_PNGMEMSRC* src = (MOD_PNGMEMSRC*)png_get_io_ptr(png_ptr);
+    if (!src) {
+        png_error(png_ptr, "no PNG source");
         return;
-
-    BYTE* eldata = (BYTE*)png_ptr->io_ptr;
-
-    // read from memory
-    memcpy(data, eldata, length);
-    eldata += length;
-    png_ptr->io_ptr = (png_voidp)eldata;
+    }
+    if ((png_size_t)(src->end - src->cur) < length) {
+        png_error(png_ptr, "truncated PNG");
+        return;
+    }
+    memcpy(data, src->cur, length);
+    src->cur += length;
 }
 
 bool MOD_PNGIMAGE::operator == (MOD_PNGIMAGE& png)
@@ -3622,62 +3537,48 @@ bool MOD_PNGIMAGE::operator == (MOD_PNGIMAGE& png)
            && yoffset == png.yoffset);
 }
 
-bool MOD_PNGIMAGE::processData(png_structp png_ptr)
+bool MOD_PNGIMAGE::processData(png_structp png_ptr, png_infop info_ptr)
 {
-    png_uint_32 color_type;
-    png_uint_32 bit_depth;
-
-    png_infop info_ptr;
-    int number_of_passes;
-
-    /* initialize stuff */
-    info_ptr = png_create_info_struct(png_ptr);
-    if(!info_ptr) return false;  // png_create_info_struct failed
-
-    if(setjmp(png_jmpbuf(png_ptr))) return false;  // Error during init_io
+    if (setjmp(png_jmpbuf(png_ptr))) return false;
 
     png_set_sig_bytes(png_ptr, 8);
-
     png_read_info(png_ptr, info_ptr);
 
-    width = info_ptr->width;
-    height = info_ptr->height;
-    color_type = info_ptr->color_type;
-    bit_depth = info_ptr->bit_depth;
+    width      = (int)png_get_image_width(png_ptr, info_ptr);
+    height     = (int)png_get_image_height(png_ptr, info_ptr);
+    color_type = png_get_color_type(png_ptr, info_ptr);
+    bit_depth  = png_get_bit_depth(png_ptr, info_ptr);
 
-    // palette
-    if(color_type == PNG_COLOR_TYPE_PALETTE)
+    if (width <= 0 || height <= 0) return false;
+
+    if (color_type == PNG_COLOR_TYPE_PALETTE)
         png_set_palette_to_rgb(png_ptr);
 
-    // expand to 8 bits
-    if(color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
+    if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
         png_set_expand_gray_1_2_4_to_8(png_ptr);
 
-    if(png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS))
+    if (png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS))
         png_set_tRNS_to_alpha(png_ptr);
 
-    // Strip 16 bit depth files to 8 bit depth
-    if(bit_depth == 16)
+    if (bit_depth == 16)
         png_set_strip_16(png_ptr);
 
-    // ARGB -> RGBA
-//	if (color_type == PNG_COLOR_TYPE_RGB_ALPHA)
-//        png_set_swap_alpha(png_ptr);
-
-    // grayscale -> RGB
-    if(color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+    if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
         png_set_gray_to_rgb(png_ptr);
 
-    number_of_passes = png_set_interlace_handling(png_ptr);
+    png_set_interlace_handling(png_ptr);
     png_read_update_info(png_ptr, info_ptr);
 
-    /* read file */
-    if(setjmp(png_jmpbuf(png_ptr))) return false;  // Error during read_image
+    const png_size_t rowbytes = png_get_rowbytes(png_ptr, info_ptr);
+    bpp = (int)(rowbytes / (png_size_t)width);
 
-    bpp = info_ptr->rowbytes / width;
-    pointer = (png_bytep*) malloc(sizeof(png_bytep) * height);
-    for(int y = 0; y < height; y++)
-        pointer[y] = (png_byte*) malloc(info_ptr->rowbytes);
+    pointer = (png_bytep*)calloc((size_t)height, sizeof(png_bytep));
+    if (!pointer) return false;
+
+    for (int y = 0; y < height; y++) {
+        pointer[y] = (png_byte*)malloc(rowbytes);
+        if (!pointer[y]) { freeImage(); return false; }
+    }
 
     png_read_image(png_ptr, pointer);
     return true;
@@ -3687,58 +3588,80 @@ bool MOD_PNGIMAGE::initImage(CString m_fn)
 {
     if((m_fn == filename) && (pointer != NULL)) return true; // already loaded
 
-    char header[8];	// 8 is the maximum size that can be check
-    png_structp png_ptr;
-
     filename = m_fn;
 
-    FILE *fp = _wfopen(CT2WEX<>(m_fn, CP_THREAD_ACP), L"rb");
+    const CStringA path = CStringA(m_fn);
+#if defined(_WIN32)
+    FILE* fp = _wfopen(CStringW(m_fn), L"rb");
+#else
+    FILE* fp = fopen(path, "rb");
+#endif
+    if (!fp) return false;
+
+    char header[8];
     bool retVal = false;
+    png_structp png_ptr = NULL;
+    png_infop info_ptr = NULL;
+
     do
     {
-        if (!fp) // File could not be opened for reading
-            break;
-
-        fread(header, 1, 8, fp);
-        if (png_sig_cmp((png_bytep)header, 0, 8)) // File is not recognized as a PNG file
-            break;
+        if (fread(header, 1, 8, fp) != 8) break;
+        if (png_sig_cmp((png_bytep)header, 0, 8)) break;  // not a PNG
 
         png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-        if (!png_ptr) // png_create_read_struct failed
-            break;
+        if (!png_ptr) break;
+
+        info_ptr = png_create_info_struct(png_ptr);
+        if (!info_ptr) break;
 
         png_init_io(png_ptr, fp);
-        retVal = processData(png_ptr);
+        retVal = processData(png_ptr, info_ptr);
     } while (false);
-    if (fp)
-        fclose(fp);
+
+    if (png_ptr) png_destroy_read_struct(&png_ptr, info_ptr ? &info_ptr : NULL, NULL);
+    fclose(fp);
     return retVal;
 }
 
-bool MOD_PNGIMAGE::initImage(BYTE* data, CString m_fn)
+bool MOD_PNGIMAGE::initImage(BYTE* data, size_t len, CString m_fn)
 {
     if((m_fn == filename) && (pointer != NULL)) return true; // already loaded
-    if(data == NULL) return false; // not loaded
-
-    char header[8];	// 8 is the maximum size that can be check
-    png_structp png_ptr;
+    if(data == NULL || len <= 8) return false;
 
     filename = m_fn;
 
-    memcpy(header, data, 8);
-    if(png_sig_cmp((png_bytep)header, 0, 8)) return false;  // File is not recognized as a PNG file
+    if (png_sig_cmp((png_bytep)data, 0, 8)) return false;  // not a PNG
 
-    data += 8; // don't forget modify pointer
-    png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-    if(!png_ptr) return false;  // png_create_read_struct failed
+    MOD_PNGMEMSRC src;
+    src.cur = data + 8;          // the signature is consumed up front
+    src.end = data + len;
 
-    png_set_read_fn(png_ptr, (png_voidp)data, &png_default_read_edata);
-    return processData(png_ptr);
+    png_structp png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    if (!png_ptr) return false;
+
+    png_infop info_ptr = png_create_info_struct(png_ptr);
+    if (!info_ptr) {
+        png_destroy_read_struct(&png_ptr, NULL, NULL);
+        return false;
+    }
+
+    png_set_read_fn(png_ptr, (png_voidp)&src, &png_read_from_memory);
+    const bool ok = processData(png_ptr, info_ptr);
+
+    png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+    return ok;
 }
 
 void MOD_PNGIMAGE::freeImage()
 {
-    if(pointer != NULL) delete [] pointer;
+    /* The rows and the row table both come from malloc; the original paired
+     * them with delete[], which is undefined behaviour and did crash on some
+     * allocators. */
+    if (pointer != NULL) {
+        for (int y = 0; y < height; y++) free(pointer[y]);
+        free(pointer);
+        pointer = NULL;
+    }
 }
 
 MOD_GRADIENT::MOD_GRADIENT()

@@ -21,10 +21,14 @@
 
 #pragma once
 
-#include <atlcoll.h>
-#include <wxutil.h>
+#include "../compat/vsfm_compat.h"
 #include "TextFile.h"
-#include "GFN.h"
+
+/* Used to be in GFN.h, together with the external-subtitle finder that went
+ * with the DirectShow filter. Only the format tags are still needed, to label
+ * a parsed script and to pick a file extension when saving. */
+enum exttype { EXTSRT = 0, EXTSUB, EXTSMI, EXTPSB, EXTSSA, EXTASS, EXTIDX, EXTUSF, EXTXSS, EXTRT };
+extern const TCHAR* exttypestr[];
 
 typedef enum {TIME, FRAME} tmode; // the meaning of STSEntry::start/end
 
@@ -67,9 +71,12 @@ public:
 
     bool operator == (MOD_PNGIMAGE& png);
     /**/
-    bool processData(png_structp png_ptr);
+    bool processData(png_structp png_ptr, png_infop info_ptr);
     bool initImage(CString m_fn);
-    bool initImage(BYTE* data, CString m_fn);
+    /* `len` is the size of the in-memory PNG. The old two-argument form read
+     * the stream with no bounds at all and walked off the end of a truncated
+     * attachment. */
+    bool initImage(BYTE* data, size_t len, CString m_fn);
     void freeImage();
 };
 #endif
