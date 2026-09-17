@@ -24,8 +24,8 @@
 
 #include <limits>
 
-/* Visibility of the eight csri_* entry points. On ELF and Mach-O the build
- * hides everything else, so the CSRI loader's dlsym() finds exactly the ABI
+/* Visibility of the csri_* entry points. On ELF and Mach-O the build hides
+ * everything else, so the CSRI loader's dlsym() finds exactly the ABI
  * and none of VSFilter's internals leak into the host's symbol namespace --
  * which matters when the host is Aegisub, itself linked against libass. */
 #if defined(_WIN32)

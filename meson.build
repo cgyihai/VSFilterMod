@@ -161,8 +161,24 @@ if get_option('bdnxml')
     subdir('src/bdnxml')
 endif
 
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+if get_option('tests')
+    csri_loader_test = executable('csri_loader_test',
+        files('tests/csri_loader_test.c'),
+        dependencies : host_system == 'windows' ? [] : [cxx.find_library('dl', required : false)],
+        build_by_default : false)
+
+    test('csri-abi', csri_loader_test,
+         args : [csri_lib.full_path()],
+         depends : [csri_lib])
+endif
+
 summary({
     'font backend'   : font_backend,
     'target'         : host_system + '/' + host_cpu,
     'BDN+XML writer' : get_option('bdnxml'),
+    'tests'          : get_option('tests'),
 }, section : 'VSFilterMod')

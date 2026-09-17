@@ -5,3 +5,6 @@ option('font_backend', type : 'combo',
 
 option('bdnxml', type : 'boolean', value : true,
     description : 'Build the BDN+XML renderer (vsfmrender)')
+
+option('tests', type : 'boolean', value : true,
+    description : 'Build and register the CSRI ABI test')
