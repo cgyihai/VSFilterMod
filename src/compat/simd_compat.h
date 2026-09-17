@@ -24,9 +24,16 @@
 
 #elif defined(__aarch64__) || defined(_M_ARM64)
 
+/* sse2neon is header-only and optional. Without it the build still works --
+ * g_cpuid reports no SSE2 and Rasterizer uses the scalar kernels that sit
+ * alongside the SSE2 ones -- it is just slower. */
+#if defined(__has_include)
+#if __has_include(<sse2neon.h>)
 #define VSFM_HAVE_SSE2 1
 #define SSE2NEON_SUPPRESS_WARNINGS 1
 #include <sse2neon.h>
+#endif
+#endif
 
 #else
 

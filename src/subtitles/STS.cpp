@@ -3528,6 +3528,13 @@ static void png_read_from_memory(png_structp png_ptr, png_bytep data, png_size_t
     src->cur += length;
 }
 
+static void png_read_from_stdio(png_structp png_ptr, png_bytep data, png_size_t length)
+{
+    FILE* fp = (FILE*)png_get_io_ptr(png_ptr);
+    if (!fp || fread(data, 1, length, fp) != length)
+        png_error(png_ptr, "short read");
+}
+
 bool MOD_PNGIMAGE::operator == (MOD_PNGIMAGE& png)
 {
     return(filename == png.filename
@@ -3612,7 +3619,9 @@ bool MOD_PNGIMAGE::initImage(CString m_fn)
         info_ptr = png_create_info_struct(png_ptr);
         if (!info_ptr) break;
 
-        png_init_io(png_ptr, fp);
+        /* Not png_init_io(): libpng is typically a separate shared library
+         * with its own C runtime, and a FILE* does not survive that boundary. */
+        png_set_read_fn(png_ptr, (png_voidp)fp, &png_read_from_stdio);
         retVal = processData(png_ptr, info_ptr);
     } while (false);
 

@@ -1023,7 +1023,7 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
             DWORD a = 0xff - w->m_style.alpha[3];
             if(alpha > 0) a = MulDiv(a, 0xff - alpha, 0xff);
             COLORREF shadow = revcolor(w->m_style.colors[3]) | (a << 24);
-            DWORD sw[6] = {shadow, -1};
+            DWORD sw[6] = {shadow, 0xffffffff};
 
 #ifdef _VSMOD // patch m011. jitter
             CPoint mod_jitter = w->m_style.mod_jitter.getOffset(rt);
@@ -1091,7 +1091,7 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
             DWORD aoutline = w->m_style.alpha[2];
             if(alpha > 0) aoutline += MulDiv(alpha, 0xff - w->m_style.alpha[2], 0xff);
             COLORREF outline = revcolor(w->m_style.colors[2]) | ((0xff - aoutline) << 24);
-            DWORD sw[6] = {outline, -1};
+            DWORD sw[6] = {outline, 0xffffffff};
 
 #ifdef _VSMOD // patch m011. jitter
             CPoint mod_jitter = w->m_style.mod_jitter.getOffset(rt);

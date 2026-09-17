@@ -16,6 +16,7 @@
 #include <map>
 #include <mutex>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cmath>
 #include <cwctype>

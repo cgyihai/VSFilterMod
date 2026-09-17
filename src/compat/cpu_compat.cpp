@@ -3,6 +3,7 @@
  */
 
 #include "cpu_compat.h"
+#include "simd_compat.h"
 
 #if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
 #define VSFM_CPU_X86 1
@@ -38,8 +39,10 @@ CCpuID::CCpuID() : m_flags(0)
     }
 #endif
 
-#elif defined(__aarch64__) || defined(_M_ARM64)
-    /* sse2neon maps the SSE2 kernels onto NEON, which every ARMv8 core has. */
+#elif (defined(__aarch64__) || defined(_M_ARM64)) && defined(VSFM_HAVE_SSE2)
+    /* sse2neon maps the SSE2 kernels onto NEON, which every ARMv8 core has.
+     * Without that header VSFM_HAVE_SSE2 is undefined and the flag stays
+     * clear, so Rasterizer takes its scalar path. */
     m_flags |= sse2;
 #endif
 }
