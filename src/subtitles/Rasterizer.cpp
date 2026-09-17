@@ -19,7 +19,8 @@
  *
  */
 
-#include "stdafx.h"
+#include "../compat/vsfm_compat.h"
+#include "../compat/cpu_compat.h"
 #include <string.h>
 #include <math.h>
 #include <vector>
@@ -213,7 +214,7 @@ void Rasterizer::_EvaluateLine(int x0, int y0, int x1, int y1)
 
         if(iy <= y1)
         {
-            __int64 invslope = (__int64(x1 - x0) << 16) / dy;
+            __int64 invslope = ((__int64)(x1 - x0) << 16) / dy;
 
             while(mEdgeNext + y1 + 1 - iy > mEdgeHeapSize)
                 _ReallocEdgeBuffer(mEdgeHeapSize * 2);
@@ -248,7 +249,7 @@ void Rasterizer::_EvaluateLine(int x0, int y0, int x1, int y1)
 
         if(iy <= y0)
         {
-            __int64 invslope = (__int64(x0 - x1) << 16) / dy;
+            __int64 invslope = ((__int64)(x0 - x1) << 16) / dy;
 
             while(mEdgeNext + y0 + 1 - iy > mEdgeHeapSize)
                 _ReallocEdgeBuffer(mEdgeHeapSize * 2);
@@ -271,96 +272,59 @@ void Rasterizer::_EvaluateLine(int x0, int y0, int x1, int y1)
     }
 }
 
-bool Rasterizer::BeginPath(HDC hdc)
+/* Installs a complete glyph path, replacing whatever was there.
+ * (Was BeginPath + TextOutW + EndPath + GetPath.) */
+bool Rasterizer::SetPath(const vsfm::GlyphPath& path)
 {
     _TrashPath();
 
-    return !!::BeginPath(hdc);
-}
+    const size_t n = path.points.size();
+    if (n == 0) return true;
 
-bool Rasterizer::EndPath(HDC hdc)
-{
-    ::CloseFigure(hdc);
+    mpPathTypes = (BYTE*)malloc(sizeof(BYTE) * n);
+    mpPathPoints = (POINT*)malloc(sizeof(POINT) * n);
 
-    if(::EndPath(hdc))
-    {
-        mPathPoints = GetPath(hdc, NULL, NULL, 0);
-
-        if(!mPathPoints)
-            return true;
-
-        mpPathTypes = (BYTE*)malloc(sizeof(BYTE) * mPathPoints);
-        mpPathPoints = (POINT*)malloc(sizeof(POINT) * mPathPoints);
-
-        if(mPathPoints == GetPath(hdc, mpPathPoints, mpPathTypes, mPathPoints))
-            return true;
+    if (!mpPathTypes || !mpPathPoints) {
+        _TrashPath();
+        return false;
     }
 
-    ::AbortPath(hdc);
+    memcpy(mpPathPoints, path.points.data(), sizeof(POINT) * n);
+    memcpy(mpPathTypes, path.types.data(), sizeof(BYTE) * n);
+    mPathPoints = n;
 
-    return false;
+    return true;
 }
 
-bool Rasterizer::PartialBeginPath(HDC hdc, bool bClearPath)
+/* Appends a glyph path offset by (dx, dy), optionally clearing first.
+ * (Was PartialBeginPath + TextOutW + PartialEndPath.) */
+bool Rasterizer::AppendPath(const vsfm::GlyphPath& path, long dx, long dy, bool bClearPath)
 {
-    if(bClearPath)
+    if (bClearPath)
         _TrashPath();
 
-    return !!::BeginPath(hdc);
-}
+    const size_t n = path.points.size();
+    if (n == 0) return true;
 
-bool Rasterizer::PartialEndPath(HDC hdc, long dx, long dy)
-{
-    ::CloseFigure(hdc);
+    const size_t total = mPathPoints + n;
 
-    if(::EndPath(hdc))
-    {
-        int nPoints;
-        BYTE* pNewTypes;
-        POINT* pNewPoints;
+    BYTE* pNewTypes = (BYTE*)realloc(mpPathTypes, total * sizeof(BYTE));
+    POINT* pNewPoints = (POINT*)realloc(mpPathPoints, total * sizeof(POINT));
 
-        nPoints = GetPath(hdc, NULL, NULL, 0);
+    if (pNewTypes) mpPathTypes = pNewTypes;
+    if (pNewPoints) mpPathPoints = pNewPoints;
 
-        if(!nPoints)
-            return true;
+    if (!pNewTypes || !pNewPoints)
+        return false;
 
-        pNewTypes = (BYTE*)realloc(mpPathTypes, (mPathPoints + nPoints) * sizeof(BYTE));
-        pNewPoints = (POINT*)realloc(mpPathPoints, (mPathPoints + nPoints) * sizeof(POINT));
-
-        if(pNewTypes)
-            mpPathTypes = pNewTypes;
-
-        if(pNewPoints)
-            mpPathPoints = pNewPoints;
-
-        BYTE* pTypes = DNew BYTE[nPoints];
-        POINT* pPoints = DNew POINT[nPoints];
-
-        if(pNewTypes && pNewPoints && nPoints == GetPath(hdc, pPoints, pTypes, nPoints))
-        {
-            for(ptrdiff_t i = 0; i < nPoints; ++i)
-            {
-                mpPathPoints[mPathPoints + i].x = pPoints[i].x + dx;
-                mpPathPoints[mPathPoints + i].y = pPoints[i].y + dy;
-                mpPathTypes[mPathPoints + i] = pTypes[i];
-            }
-
-            mPathPoints += nPoints;
-
-            delete[] pTypes;
-            delete[] pPoints;
-            return true;
-        }
-        else
-            DebugBreak();
-
-        delete[] pTypes;
-        delete[] pPoints;
+    for (size_t i = 0; i < n; ++i) {
+        mpPathPoints[mPathPoints + i].x = path.points[i].x + dx;
+        mpPathPoints[mPathPoints + i].y = path.points[i].y + dy;
+        mpPathTypes[mPathPoints + i] = path.types[i];
     }
 
-    ::AbortPath(hdc);
-
-    return false;
+    mPathPoints = total;
+    return true;
 }
 
 bool Rasterizer::ScanConvert()
@@ -538,7 +502,7 @@ bool Rasterizer::ScanConvert()
                 x2 = (x >> 1);
 
                 if(x2 > x1)
-                    mOutline.push_back(std::pair<__int64, __int64>((y << 32) + x1 + 0x4000000040000000i64, (y << 32) + x2 + 0x4000000040000000i64)); // G: damn Avery, this is evil! :)
+                    mOutline.push_back(std::pair<__int64, __int64>((y << 32) + x1 + 0x4000000040000000LL, (y << 32) + x2 + 0x4000000040000000LL)); // G: damn Avery, this is evil! :)
             }
         }
 
@@ -684,7 +648,7 @@ bool Rasterizer::CreateWidenedRegion(int rx, int ry)
     if(rx < 0) rx = 0;
     if(ry < 0) ry = 0;
 
-    mWideBorder = max(rx, ry);
+    mWideBorder = std::max(rx, ry);
 
     if(ry > 0)
     {
@@ -759,7 +723,7 @@ bool Rasterizer::Rasterize(int xsub, int ysub, int fBlur, double fGaussianBlur)
     // fixed image height
     mOverlayHeight = ((height + 14) >> 3) + 1;
 
-    mpOverlayBuffer = DNew byte[2 * mOverlayWidth * mOverlayHeight];
+    mpOverlayBuffer = DNew BYTE[2 * mOverlayWidth * mOverlayHeight];
     memset(mpOverlayBuffer, 0, 2 * mOverlayWidth * mOverlayHeight);
 
     // Are we doing a border?
@@ -781,7 +745,7 @@ bool Rasterizer::Rasterize(int xsub, int ysub, int fBlur, double fGaussianBlur)
             {
                 size_t first = x1 >> 3;
                 size_t last = (x2 - 1) >> 3;
-                byte* dst = mpOverlayBuffer + 2 * (mOverlayWidth * (y >> 3) + first) + i;
+                BYTE* dst = mpOverlayBuffer + 2 * (mOverlayWidth * (y >> 3) + first) + i;
 
                 if(first == last)
                     *dst += x2 - x1;
@@ -810,12 +774,12 @@ bool Rasterizer::Rasterize(int xsub, int ysub, int fBlur, double fGaussianBlur)
         {
             size_t pitch = mOverlayWidth * 2;
 
-            byte *tmp = DNew byte[pitch*mOverlayHeight];
+            BYTE *tmp = DNew BYTE[pitch*mOverlayHeight];
             if(!tmp) return(false);
 
             int border = !mWideOutline.empty() ? 1 : 0;
 
-            byte *src = mpOverlayBuffer + border;
+            BYTE *src = mpOverlayBuffer + border;
 
             SeparableFilterX<2>(src, tmp, mOverlayWidth, mOverlayHeight, pitch, filter.kernel, filter.width, filter.divisor);
             SeparableFilterY<2>(tmp, src, mOverlayWidth, mOverlayHeight, pitch, filter.kernel, filter.width, filter.divisor);
@@ -832,7 +796,7 @@ bool Rasterizer::Rasterize(int xsub, int ysub, int fBlur, double fGaussianBlur)
         {
             int pitch = mOverlayWidth * 2;
 
-            byte* tmp = DNew byte[pitch*mOverlayHeight];
+            BYTE* tmp = DNew BYTE[pitch*mOverlayHeight];
             if(!tmp) return(false);
 
             memcpy(tmp, mpOverlayBuffer, pitch * mOverlayHeight);
@@ -842,8 +806,8 @@ bool Rasterizer::Rasterize(int xsub, int ysub, int fBlur, double fGaussianBlur)
             // This could be done in a separated way and win some speed
             for(ptrdiff_t j = 1; j < mOverlayHeight - 1; j++)
             {
-                byte* src = tmp + pitch * j + 2 + border;
-                byte* dst = mpOverlayBuffer + pitch * j + 2 + border;
+                BYTE* src = tmp + pitch * j + 2 + border;
+                BYTE* dst = mpOverlayBuffer + pitch * j + 2 + border;
 
                 for(ptrdiff_t i = 1; i < mOverlayWidth - 1; i++, src += 2, dst += 2)
                 {
@@ -888,8 +852,7 @@ static __forceinline void pixmix2(DWORD *dst, DWORD color, DWORD shapealpha, DWO
            | ((((*dst >> 8) & 0x00ff0000) * ia) & 0xff000000);
 }
 
-#include <xmmintrin.h>
-#include <emmintrin.h>
+#include "../compat/simd_compat.h"
 
 static __forceinline void pixmix_sse2(DWORD* dst, DWORD color, DWORD alpha)
 {
@@ -929,7 +892,6 @@ static __forceinline void pixmix2_sse2(DWORD* dst, DWORD color, DWORD shapealpha
     *dst = (DWORD)_mm_cvtsi128_si32(r);
 }
 
-#include <mmintrin.h>
 
 // Calculate a - b clamping to 0 instead of underflowing
 
@@ -944,7 +906,7 @@ static __forceinline DWORD safe_subtract_sse2(DWORD a, DWORD b)
 
 static __forceinline DWORD safe_subtract(DWORD a, DWORD b)
 {
-#ifndef _M_X64
+#ifdef VSFM_HAVE_MMX
     __m64 ap = _mm_cvtsi32_si64(a);
     __m64 bp = _mm_cvtsi32_si64(b);
     __m64 rp = _mm_subs_pu16(ap, bp);
@@ -956,10 +918,8 @@ static __forceinline DWORD safe_subtract(DWORD a, DWORD b)
 #endif
 }
 
-// For CPUID usage in Rasterizer::Draw
-#include "../dsutil/vd.h"
 
-static const __int64 _00ff00ff00ff00ff = 0x00ff00ff00ff00ffi64;
+static const __int64 _00ff00ff00ff00ff = 0x00ff00ff00ff00ffLL;
 
 // some helper procedures (Draw is so big)
 void Rasterizer::Draw_noAlpha_spFF_Body_0(RasterizerNfo& rnfo)
@@ -967,7 +927,7 @@ void Rasterizer::Draw_noAlpha_spFF_Body_0(RasterizerNfo& rnfo)
     int h = rnfo.h;
     int color = rnfo.color;
 
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
     // The <<6 is due to pixmix expecting the alpha parameter to be
     // the multiplication of two 6-bit unsigned numbers but we
@@ -986,7 +946,7 @@ void Rasterizer::Draw_noAlpha_spFF_noBody_0(RasterizerNfo& rnfo)
     int h = rnfo.h;
     int color = rnfo.color;
 
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
     // src contains two different bitmaps, interlaced per pixel.
     // The first stored is the fill, the second is the widened
@@ -1012,12 +972,12 @@ void Rasterizer::Draw_noAlpha_sp_Body_0(RasterizerNfo& rnfo)
     int color = rnfo.color;
 
 
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
     // xo is the offset (usually negative) we have moved into the image
     // So if we have passed the switchpoint (?) switch to another colour
     // (So switchpts stores both colours *and* coordinates?)
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
     int color2 = rnfo.sw[2];
     while(h--)
     {
@@ -1035,10 +995,10 @@ void Rasterizer::Draw_noAlpha_sp_noBody_0(RasterizerNfo& rnfo)
     int h = rnfo.h;
     int color = rnfo.color;
 
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
 
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
     int color2 = rnfo.sw[2];
     while(h--)
     {
@@ -1056,12 +1016,12 @@ void Rasterizer::Draw_Alpha_spFF_Body_0(RasterizerNfo& rnfo)
 #ifdef _VSMOD // patch m006. moveable vector clip
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 #else
-    byte* am = rnfo.am;
+    BYTE* am = rnfo.am;
 #endif
     int h = rnfo.h;
     int color = rnfo.color;
 
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
     // Both s and am contain 6-bit bitmaps of two different
     // alpha masks; s is the subtitle shape and am is the
@@ -1087,15 +1047,15 @@ void Rasterizer::Draw_Alpha_spFF_noBody_0(RasterizerNfo& rnfo)
 #ifdef _VSMOD // patch m006. moveable vector clip
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 #else
-    byte* am = rnfo.am;
+    BYTE* am = rnfo.am;
 #endif
     int h = rnfo.h;
     int color = rnfo.color;
 
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
 
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
     int color2 = rnfo.sw[2];
     while(h--)
     {
@@ -1121,13 +1081,13 @@ void Rasterizer::Draw_Alpha_sp_Body_0(RasterizerNfo& rnfo)
 #ifdef _VSMOD // patch m006. moveable vector clip
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 #else
-    byte* am = rnfo.am;
+    BYTE* am = rnfo.am;
 #endif
     int h = rnfo.h;
     int color = rnfo.color;
 
 
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
     while(h--)
     {
@@ -1151,15 +1111,15 @@ void Rasterizer::Draw_Alpha_sp_noBody_0(RasterizerNfo& rnfo)
 #ifdef _VSMOD // patch m006. moveable vector clip
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 #else
-    byte* am = rnfo.am;
+    BYTE* am = rnfo.am;
 #endif
     int h = rnfo.h;
     int color = rnfo.color;
 
 
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
     int color2 = rnfo.sw[2];
     while(h--)
     {
@@ -1187,7 +1147,7 @@ void Rasterizer::Draw_noAlpha_spFF_Body_sse2(RasterizerNfo& rnfo)
     int color = rnfo.color;
 
     const DWORD* sw = rnfo.sw;
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
     // The <<6 is due to pixmix expecting the alpha parameter to be
     // the multiplication of two 6-bit unsigned numbers but we
@@ -1207,7 +1167,7 @@ void Rasterizer::Draw_noAlpha_spFF_noBody_sse2(RasterizerNfo& rnfo)
     int color = rnfo.color;
 
     const DWORD* sw = rnfo.sw;
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
     // src contains two different bitmaps, interlaced per pixel.
     // The first stored is the fill, the second is the widened
@@ -1233,12 +1193,12 @@ void Rasterizer::Draw_noAlpha_sp_Body_sse2(RasterizerNfo& rnfo)
 
     int color = rnfo.color;
 
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
     // xo is the offset (usually negative) we have moved into the image
     // So if we have passed the switchpoint (?) switch to another colour
     // (So switchpts stores both colours *and* coordinates?)
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
     int color2 = rnfo.sw[2];
     while(h--)
     {
@@ -1257,9 +1217,9 @@ void Rasterizer::Draw_noAlpha_sp_noBody_sse2(RasterizerNfo& rnfo)
     int color = rnfo.color;
 
 
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
     int color2 = rnfo.sw[2];
     while(h--)
     {
@@ -1277,12 +1237,12 @@ void Rasterizer::Draw_Alpha_spFF_Body_sse2(RasterizerNfo& rnfo)
 #ifdef _VSMOD // patch m006. moveable vector clip
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 #else
-    byte* am = rnfo.am;
+    BYTE* am = rnfo.am;
 #endif
     int h = rnfo.h;
     int color = rnfo.color;
 
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
     // Both s and am contain 6-bit bitmaps of two different
     // alpha masks; s is the subtitle shape and am is the
@@ -1308,12 +1268,12 @@ void Rasterizer::Draw_Alpha_spFF_noBody_sse2(RasterizerNfo& rnfo)
 #ifdef _VSMOD // patch m006. moveable vector clip
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 #else
-    byte* am = rnfo.am;
+    BYTE* am = rnfo.am;
 #endif
     int h = rnfo.h;
     int color = rnfo.color;
 
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
 
     while(h--)
@@ -1335,16 +1295,16 @@ void Rasterizer::Draw_Alpha_sp_Body_sse2(RasterizerNfo& rnfo)
 #ifdef _VSMOD // patch m006. moveable vector clip
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 #else
-    byte* am = rnfo.am;
+    BYTE* am = rnfo.am;
 #endif
     int h = rnfo.h;
     int color = rnfo.color;
 
 
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
 
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
     int color2 = rnfo.sw[2];
     while(h--)
     {
@@ -1370,16 +1330,16 @@ void Rasterizer::Draw_Alpha_sp_noBody_sse2(RasterizerNfo& rnfo)
 #ifdef _VSMOD // patch m006. moveable vector clip
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 #else
-    byte* am = rnfo.am;
+    BYTE* am = rnfo.am;
 #endif
     int h = rnfo.h;
 
     DWORD color = rnfo.color;
 
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
 
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
     int color2 = rnfo.sw[2];
     while(h--)
     {
@@ -1404,7 +1364,7 @@ void Rasterizer::Draw_Alpha_sp_noBody_sse2(RasterizerNfo& rnfo)
 void Rasterizer::Draw_Grad_noAlpha_spFF_Body_0(RasterizerNfo& rnfo)
 {
     double hfull = (double)rnfo.h;
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
@@ -1424,7 +1384,7 @@ void Rasterizer::Draw_Grad_noAlpha_spFF_Body_0(RasterizerNfo& rnfo)
 void Rasterizer::Draw_Grad_noAlpha_spFF_noBody_0(RasterizerNfo& rnfo)
 {
     double hfull = (double)rnfo.h;
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
@@ -1447,13 +1407,13 @@ void Rasterizer::Draw_Grad_noAlpha_sp_Body_0(RasterizerNfo& rnfo)
     double hfull = (double)rnfo.h;
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
 
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
 
     int h = rnfo.h;
     int w = rnfo.w;
 
-    int gran = max(rnfo.sw[3] + 1 - rnfo.xo, 0);
+    int gran = std::max((int)rnfo.sw[3] + 1 - rnfo.xo, 0);
     while(h--)
     {
         for(int wt = 0; wt < gran; ++wt)
@@ -1470,13 +1430,13 @@ void Rasterizer::Draw_Grad_noAlpha_sp_noBody_0(RasterizerNfo& rnfo)
     double hfull = (double)rnfo.h;
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
 
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
 
     int h = rnfo.h;
     int w = rnfo.w;
 
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
     while(h--)
     {
         for(int wt = 0; wt < gran; ++wt)
@@ -1491,7 +1451,7 @@ void Rasterizer::Draw_Grad_noAlpha_sp_noBody_0(RasterizerNfo& rnfo)
 void Rasterizer::Draw_Grad_Alpha_spFF_Body_0(RasterizerNfo& rnfo)
 {
     double hfull = (double)rnfo.h;
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
@@ -1511,7 +1471,7 @@ void Rasterizer::Draw_Grad_Alpha_spFF_Body_0(RasterizerNfo& rnfo)
 void Rasterizer::Draw_Grad_Alpha_spFF_noBody_0(RasterizerNfo& rnfo)
 {
     double hfull = (double)rnfo.h;
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
@@ -1534,8 +1494,8 @@ void Rasterizer::Draw_Grad_Alpha_sp_Body_0(RasterizerNfo& rnfo)
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
-    byte* s = rnfo.s;
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
 
     int h = rnfo.h;
@@ -1558,8 +1518,8 @@ void Rasterizer::Draw_Grad_Alpha_sp_noBody_0(RasterizerNfo& rnfo)
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
-    byte* src = rnfo.src;
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
 
     int h = rnfo.h;
@@ -1583,7 +1543,7 @@ void Rasterizer::Draw_Grad_noAlpha_spFF_Body_sse2(RasterizerNfo& rnfo)
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
     int typ = rnfo.typ;
 
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
 
     int h = rnfo.h;
@@ -1603,7 +1563,7 @@ void Rasterizer::Draw_Grad_noAlpha_spFF_noBody_sse2(RasterizerNfo& rnfo)
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
     int typ = rnfo.typ;
 
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
 
     int h = rnfo.h;
@@ -1623,12 +1583,12 @@ void Rasterizer::Draw_Grad_noAlpha_sp_Body_sse2(RasterizerNfo& rnfo)
     double hfull = (double)rnfo.h;
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
 
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
 
     int h = rnfo.h;
     int w = rnfo.w;
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
     while(h--)
     {
         for(int wt = 0; wt < gran; ++wt)
@@ -1645,12 +1605,12 @@ void Rasterizer::Draw_Grad_noAlpha_sp_noBody_sse2(RasterizerNfo& rnfo)
     double hfull = (double)rnfo.h;
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
 
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
 
     int h = rnfo.h;
     int w = rnfo.w;
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
     while(h--)
     {
         for(int wt = 0; wt < gran; ++wt)
@@ -1663,10 +1623,10 @@ void Rasterizer::Draw_Grad_noAlpha_sp_noBody_sse2(RasterizerNfo& rnfo)
 }
 
 void Rasterizer::Draw_Grad_Alpha_spFF_Body_sse2(RasterizerNfo& rnfo)
-//(int w, int h, int overlayp, int typ, MOD_GRADIENT& mod_grad, int pitch, DWORD* dst, const byte* s, MOD_MOVEVC& mod_vc)
+//(int w, int h, int overlayp, int typ, MOD_GRADIENT& mod_grad, int pitch, DWORD* dst, const BYTE* s, MOD_MOVEVC& mod_vc)
 {
     double hfull = (double)rnfo.h;
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
@@ -1684,10 +1644,10 @@ void Rasterizer::Draw_Grad_Alpha_spFF_Body_sse2(RasterizerNfo& rnfo)
 }
 
 void Rasterizer::Draw_Grad_Alpha_spFF_noBody_sse2(RasterizerNfo& rnfo)
-//(int w, int h, int overlayp, int typ, MOD_GRADIENT& mod_grad, int pitch, DWORD* dst, const byte* src, MOD_MOVEVC& mod_vc)
+//(int w, int h, int overlayp, int typ, MOD_GRADIENT& mod_grad, int pitch, DWORD* dst, const BYTE* src, MOD_MOVEVC& mod_vc)
 {
     double hfull = (double)rnfo.h;
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
@@ -1710,12 +1670,12 @@ void Rasterizer::Draw_Grad_Alpha_sp_Body_sse2(RasterizerNfo& rnfo)
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 
-    byte* s = rnfo.s;
+    BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
 
     int h = rnfo.h;
     int w = rnfo.w;
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
     while(h--)
     {
         for(int wt = 0; wt < gran; ++wt)
@@ -1733,12 +1693,12 @@ void Rasterizer::Draw_Grad_Alpha_sp_noBody_sse2(RasterizerNfo& rnfo)
     MOD_GRADIENT mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 
-    byte* src = rnfo.src;
+    BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
 
     int h = rnfo.h;
     int w = rnfo.w;
-    int gran = min(rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
     while(h--)
     {
         for(int wt = 0; wt < gran; ++wt)
@@ -1760,10 +1720,10 @@ void Rasterizer::Draw_Grad_Alpha_sp_noBody_sse2(RasterizerNfo& rnfo)
 // fBody tells whether to render the body of the subs.
 // fBorder tells whether to render the border of the subs.
 #ifdef _VSMOD // patch m004. gradient colors
-CRect Rasterizer::Draw(SubPicDesc& spd, CRect& clipRect, byte* pAlphaMask, int xsub, int ysub,
+CRect Rasterizer::Draw(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, int xsub, int ysub,
                        const DWORD* switchpts, bool fBody, bool fBorder, int typ, MOD_GRADIENT& mod_grad, MOD_MOVEVC& mod_vc)
 #else
-CRect Rasterizer::Draw(SubPicDesc& spd, CRect& clipRect, byte* pAlphaMask, int xsub, int ysub,
+CRect Rasterizer::Draw(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, int xsub, int ysub,
                        const DWORD* switchpts, bool fBody, bool fBorder)
 #endif
 {
@@ -2112,7 +2072,7 @@ CRect Rasterizer::Draw(SubPicDesc& spd, CRect& clipRect, byte* pAlphaMask, int x
     // Remember to EMMS!
     // Rendering fails in funny ways if we don't do this.
 
-#ifndef _M_X64
+#ifdef VSFM_HAVE_MMX
     _mm_empty();
 #endif
 
@@ -2171,9 +2131,9 @@ void MOD_MOVEVC::clear()
     isInverse = false;
 }
 
-byte MOD_MOVEVC::GetAlphaValue(int wx, int wy)
+BYTE MOD_MOVEVC::GetAlphaValue(int wx, int wy)
 {
-    byte alpham;
+    BYTE alpham;
     if(!enable)
     {
 //		return 0xFF;

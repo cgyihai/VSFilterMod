@@ -28,6 +28,13 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <tchar.h>
+
+/* Came from the DirectShow headers, which this tree no longer includes. */
+#ifndef _REFERENCE_TIME_DEFINED
+#define _REFERENCE_TIME_DEFINED
+typedef LONGLONG REFERENCE_TIME;
+#endif
 
 #else  // ---------------------------------------------------------------- POSIX
 
@@ -187,6 +194,11 @@ typedef const TCHAR* LPCTSTR;
 
 #ifndef TRACE
 #define TRACE(...) ((void)0)
+#endif
+
+/* Came from dsutil/SharedInclude.h; used by the \move and rotation maths. */
+#ifndef PI
+#define PI 3.1415926535897932384626433832795
 #endif
 
 /* MulDiv is used by the style -> LOGFONT conversion. */

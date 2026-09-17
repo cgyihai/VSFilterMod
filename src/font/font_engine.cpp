@@ -17,6 +17,7 @@
 #include <mutex>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 #include <cwctype>
 
 namespace vsfm {
@@ -178,6 +179,11 @@ public:
     bool underline = false;
     bool strikeOut = false;
 
+    /* Non-identity when orient is in play; rotates each glyph about its own
+     * origin without tilting the baseline, as GM_ADVANCED + lfOrientation did. */
+    bool hasRotation = false;
+    FT_Matrix rotation = { 0x10000, 0, 0, 0x10000 };
+
     /* In GDI path units (= pixels at the requested cell height). */
     int underlinePos = 0;       // distance below the baseline to the top edge
     int underlineThickness = 1;
@@ -218,6 +224,7 @@ public:
 
         if (syntheticItalic) FT_GlyphSlot_Oblique(face->glyph);
         if (syntheticBold)   FT_GlyphSlot_Embolden(face->glyph);
+        if (hasRotation)     FT_Outline_Transform(&face->glyph->outline, &rotation);
         return true;
     }
 };
@@ -329,11 +336,12 @@ struct FontEngine::Impl
     struct Key
     {
         std::wstring face;
-        int height, weight, charSet;
+        int height, weight, charSet, orientation;
         bool italic, underline, strikeOut;
 
         bool operator<(const Key& o) const
         {
+            if (orientation != o.orientation) return orientation < o.orientation;
             if (height != o.height) return height < o.height;
             if (weight != o.weight) return weight < o.weight;
             if (charSet != o.charSet) return charSet < o.charSet;
@@ -372,6 +380,7 @@ struct FontEngine::Impl
         k.height = d.height;
         k.weight = d.weight;
         k.charSet = d.charSet;
+        k.orientation = d.orientation;
         k.italic = d.italic;
         k.underline = d.underline;
         k.strikeOut = d.strikeOut;
@@ -536,6 +545,17 @@ std::shared_ptr<FontFace> FontEngine::OpenFont(const FontDesc& desc)
         const bool isItalic = (impl->face->style_flags & FT_STYLE_FLAG_ITALIC) != 0;
         match.syntheticBold = (desc.weight >= FW_BOLD) && !isBold;
         match.syntheticItalic = desc.italic && !isItalic;
+    }
+
+    if (desc.orientation % 3600 != 0) {
+        const double rad = (double)desc.orientation * 3.14159265358979323846 / 1800.0;
+        const FT_Fixed c = (FT_Fixed)(cos(rad) * 65536.0 + 0.5);
+        const FT_Fixed sn = (FT_Fixed)(sin(rad) * 65536.0 + 0.5);
+        /* FreeType is y-up, so a positive lfOrientation (counter-clockwise on
+         * screen) is a positive rotation here too. */
+        impl->rotation.xx = c;  impl->rotation.xy = -sn;
+        impl->rotation.yx = sn; impl->rotation.yy = c;
+        impl->hasRotation = true;
     }
 
     impl->syntheticBold = match.syntheticBold;

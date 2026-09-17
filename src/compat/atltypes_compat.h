@@ -153,4 +153,19 @@ public:
 
     CRect operator+(const POINT& p) const { CRect r(*this); r.OffsetRect(p); return r; }
     CRect operator-(const POINT& p) const { CRect r(*this); r.OffsetRect(-p.x, -p.y); return r; }
+
+    /* MFC overloads + and - with a RECT to mean inflate and deflate by that
+     * rectangle's four members -- not offset. RTS relies on it to add and
+     * remove line borders, so the asymmetry with the POINT overloads above is
+     * intentional. */
+    CRect operator+(const RECT& rc) const
+    {
+        return CRect(left - rc.left, top - rc.top, right + rc.right, bottom + rc.bottom);
+    }
+    CRect operator-(const RECT& rc) const
+    {
+        return CRect(left + rc.left, top + rc.top, right - rc.right, bottom - rc.bottom);
+    }
+    CRect& operator+=(const RECT& rc) { *this = *this + rc; return *this; }
+    CRect& operator-=(const RECT& rc) { *this = *this - rc; return *this; }
 };

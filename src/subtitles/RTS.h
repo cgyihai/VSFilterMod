@@ -23,14 +23,22 @@
 
 #include "STS.h"
 #include "Rasterizer.h"
-#include "..\SubPic\ISubPic.h"
+#include "../compat/vsfm_compat.h"
+#include "../font/font_engine.h"
 
-class CMyFont : public CFont
+/* Was a CFont selected into a global screen HDC. It is now a handle on a
+ * FreeType face at the requested size; m_ascent/m_descent keep the ">> 3"
+ * scaling the layout code expects, since RTS builds fonts at 64x. */
+class CMyFont
 {
 public:
     int m_ascent, m_descent;
 
-    CMyFont(STSStyle& style);
+    std::shared_ptr<vsfm::FontFace> m_face;
+
+    CMyFont(const STSStyle& style);
+
+    bool IsValid() const { return m_face && m_face->IsValid(); }
 };
 
 class CPolygon;
@@ -63,7 +71,7 @@ public:
 
     int m_width, m_ascent, m_descent;
 
-    CWord(STSStyle& style, CStringW str, int ktype, int kstart, int kend, double scalex, double scaley); // str[0] = 0 -> m_fLineBreak = true (in this case we only need and use the height of m_font from the whole class)
+    CWord(const STSStyle& style, CStringW str, int ktype, int kstart, int kend, double scalex, double scaley); // str[0] = 0 -> m_fLineBreak = true (in this case we only need and use the height of m_font from the whole class)
     virtual ~CWord();
 
     virtual CWord* Copy() = 0;
@@ -78,7 +86,7 @@ protected:
     virtual bool CreatePath();
 
 public:
-    CText(STSStyle& style, CStringW str, int ktype, int kstart, int kend, double scalex, double scaley);
+    CText(const STSStyle& style, CStringW str, int ktype, int kstart, int kend, double scalex, double scaley);
 
     virtual CWord* Copy();
     virtual bool Append(CWord* w);
@@ -101,7 +109,7 @@ protected:
     virtual bool CreatePath();
 
 public:
-    CPolygon(STSStyle& style, CStringW str, int ktype, int kstart, int kend, double scalex, double scaley, int baseline);
+    CPolygon(const STSStyle& style, CStringW str, int ktype, int kstart, int kend, double scalex, double scaley, int baseline);
     virtual ~CPolygon();
 
     virtual CWord* Copy();
@@ -221,8 +229,7 @@ public:
     CRect AllocRect(CSubtitle* s, int segment, int entry, int layer, int collisions);
 };
 
-[uuid("537DCACA-2812-4a4f-B2C6-1A34C17ADEB0")]
-class CRenderedTextSubtitle : public CSimpleTextSubtitle, public ISubPicProviderImpl, public ISubStream
+class CRenderedTextSubtitle : public CSimpleTextSubtitle
 {
     CAtlMap<int, CSubtitle*> m_subtitleCache;
 
@@ -272,24 +279,13 @@ public:
     bool Init(CSize size, CRect vidrect); // will call Deinit()
     void Deinit();
 
-    DECLARE_IUNKNOWN
-    STDMETHODIMP NonDelegatingQueryInterface(REFIID riid, void** ppv);
-
-    // ISubPicProvider
-    STDMETHODIMP_(POSITION) GetStartPosition(REFERENCE_TIME rt, double fps);
-    STDMETHODIMP_(POSITION) GetNext(POSITION pos);
-    STDMETHODIMP_(REFERENCE_TIME) GetStart(POSITION pos, double fps);
-    STDMETHODIMP_(REFERENCE_TIME) GetStop(POSITION pos, double fps);
-    STDMETHODIMP_(bool) IsAnimated(POSITION pos);
-    STDMETHODIMP Render(SubPicDesc& spd, REFERENCE_TIME rt, double fps, RECT& bbox);
-
-    // IPersist
-    STDMETHODIMP GetClassID(CLSID* pClassID);
-
-    // ISubStream
-    STDMETHODIMP_(int) GetStreamCount();
-    STDMETHODIMP GetStreamInfo(int i, WCHAR** ppName, LCID* pLCID);
-    STDMETHODIMP_(int) GetStream();
-    STDMETHODIMP SetStream(int iStream);
-    STDMETHODIMP Reload();
+    /* These were the ISubPicProvider interface; they are ordinary methods
+     * now. The signatures are unchanged so the render loop below and the CSRI
+     * entry point did not have to move. */
+    POSITION GetStartPosition(REFERENCE_TIME rt, double fps);
+    POSITION GetNext(POSITION pos);
+    REFERENCE_TIME GetStart(POSITION pos, double fps);
+    REFERENCE_TIME GetStop(POSITION pos, double fps);
+    bool IsAnimated(POSITION pos);
+    HRESULT Render(SubPicDesc& spd, REFERENCE_TIME rt, double fps, RECT& bbox);
 };

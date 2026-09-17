@@ -41,7 +41,7 @@ static long revcolor(long c)
 
 struct htmlcolor
 {
-    TCHAR* name;
+    const TCHAR* name;
     DWORD color;
 } hmtlcolors[] =
 {
@@ -253,12 +253,9 @@ int CharSetLen = countof(CharSetList);
 
 //
 
-static DWORD CharSetToCodePage(DWORD dwCharSet)
-{
-    CHARSETINFO cs = {0};
-    ::TranslateCharsetInfo((DWORD *)dwCharSet, &cs, TCI_SRCCHARSET);
-    return cs.ciACP;
-}
+/* CharSetToCodePage now lives in compat/text_compat: a fixed table rather than
+ * TranslateCharsetInfo, which consults the host's installed fonts and locale
+ * and so could decode the same script differently on different machines. */
 
 int FindChar(CStringW str, WCHAR c, int pos, bool fUnicode, int CharSet)
 {
@@ -945,7 +942,7 @@ static bool OpenMicroDVD(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet)
             if(fCheck2 && ret.GetCount())
             {
                 STSEntry& stse = ret[ret.GetCount()-1];
-                stse.end = min(stse.end, start);
+                stse.end = std::min(stse.end, start);
                 fCheck2 = false;
             }
 
@@ -1613,7 +1610,7 @@ static bool OpenSubStationAlpha(CTextFile* file, CSimpleTextSubtitle& ret, int C
                 if(sver >= 6)	style->relativeTo = GetInt(buff);
 
                 if(sver <= 4)	style->colors[2] = style->colors[3]; // style->colors[2] is used for drawing the outline
-                if(sver <= 4)	alpha = max(min(alpha, 0xff), 0);
+                if(sver <= 4)	alpha = std::max(std::min(alpha, 0xff), 0);
                 if(sver <= 4)
                 {
                     for(ptrdiff_t i = 0; i < 3; i++) style->alpha[i] = alpha;
@@ -1624,17 +1621,17 @@ static bool OpenSubStationAlpha(CTextFile* file, CSimpleTextSubtitle& ret, int C
                         style->alpha[i] = (BYTE)(style->colors[i] >> 24);
                         style->colors[i] &= 0xffffff;
                     }
-                if(sver >= 5)	style->fontScaleX = max(style->fontScaleX, 0);
-                if(sver >= 5)	style->fontScaleY = max(style->fontScaleY, 0);
+                if(sver >= 5)	style->fontScaleX = std::max(style->fontScaleX, 0.0);
+                if(sver >= 5)	style->fontScaleY = std::max(style->fontScaleY, 0.0);
 #ifndef _VSMOD // patch f002. negative fontspacing at style
-                if(sver >= 5)	style->fontSpacing = max(style->fontSpacing, 0);
+                if(sver >= 5)	style->fontSpacing = std::max(style->fontSpacing, 0.0);
 #endif
                 style->fontAngleX = style->fontAngleY = 0;
                 style->borderStyle = style->borderStyle == 1 ? 0 : style->borderStyle == 3 ? 1 : 0;
-                style->outlineWidthX = max(style->outlineWidthX, 0);
-                style->outlineWidthY = max(style->outlineWidthY, 0);
-                style->shadowDepthX = max(style->shadowDepthX, 0);
-                style->shadowDepthY = max(style->shadowDepthY, 0);
+                style->outlineWidthX = std::max(style->outlineWidthX, 0.0);
+                style->outlineWidthY = std::max(style->outlineWidthY, 0.0);
+                style->shadowDepthX = std::max(style->shadowDepthX, 0.0);
+                style->shadowDepthY = std::max(style->shadowDepthY, 0.0);
                 if(sver <= 4)	style->scrAlignment = (style->scrAlignment & 4) ? ((style->scrAlignment & 3) + 6) // top
                                                           : (style->scrAlignment & 8) ? ((style->scrAlignment & 3) + 3) // mid
                                                           : (style->scrAlignment & 3); // bottom
@@ -1699,7 +1696,7 @@ static bool OpenSubStationAlpha(CTextFile* file, CSimpleTextSubtitle& ret, int C
                 if(version >= 6)marginRect.bottom = GetInt(buff);
                 Effect = WToT(GetStr(buff));
 
-                int len = min(Effect.GetLength(), buff.GetLength());
+                int len = std::min(Effect.GetLength(), buff.GetLength());
                 if(Effect.Left(len) == WToT(buff.Left(len))) Effect.Empty();
 
                 Style.TrimLeft('*');
@@ -1849,14 +1846,14 @@ static bool OpenXombieSub(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
                 style->marginRect.top = style->marginRect.bottom = GetInt(buff);
                 style->charSet = GetInt(buff);
 
-                style->fontScaleX = max(style->fontScaleX, 0);
-                style->fontScaleY = max(style->fontScaleY, 0);
-                style->fontSpacing = max(style->fontSpacing, 0);
+                style->fontScaleX = std::max(style->fontScaleX, 0.0);
+                style->fontScaleY = std::max(style->fontScaleY, 0.0);
+                style->fontSpacing = std::max(style->fontSpacing, 0.0);
                 style->borderStyle = style->borderStyle == 1 ? 0 : style->borderStyle == 3 ? 1 : 0;
-                style->outlineWidthX = max(style->outlineWidthX, 0);
-                style->outlineWidthY = max(style->outlineWidthY, 0);
-                style->shadowDepthX = max(style->shadowDepthX, 0);
-                style->shadowDepthY = max(style->shadowDepthY, 0);
+                style->outlineWidthX = std::max(style->outlineWidthX, 0.0);
+                style->outlineWidthY = std::max(style->outlineWidthY, 0.0);
+                style->shadowDepthX = std::max(style->shadowDepthX, 0.0);
+                style->shadowDepthY = std::max(style->shadowDepthY, 0.0);
 
                 ret.AddStyle(StyleName, style);
             }
@@ -2065,7 +2062,7 @@ void CSimpleTextSubtitle::Copy(CSimpleTextSubtitle& sts)
     m_fUsingAutoGeneratedDefaultStyle = sts.m_fUsingAutoGeneratedDefaultStyle;
     CopyStyles(sts.m_styles);
     m_segments.Copy(sts.m_segments);
-    __super::Copy(sts);
+    CAtlArray<STSEntry>::Copy(sts);
 }
 
 void CSimpleTextSubtitle::Append(CSimpleTextSubtitle& sts, int timeoff)
@@ -2092,7 +2089,7 @@ void CSimpleTextSubtitle::Append(CSimpleTextSubtitle& sts, int timeoff)
         stse.start += timeoff;
         stse.end += timeoff;
         stse.readorder += GetCount();
-        __super::Add(stse);
+        CAtlArray<STSEntry>::Add(stse);
     }
 
     CreateSegments();
@@ -2177,7 +2174,7 @@ void CSimpleTextSubtitle::Add(CStringW str, bool fUnicode, int start, int end, C
     sub.end = end;
     sub.readorder = readorder < 0 ? GetCount() : readorder;
 
-    int n = (int)__super::GetCount();
+    int n = (int)CAtlArray<STSEntry>::GetCount();
     
     // Entries with a null duration don't belong to any segments since
     // they are not to be rendered. We choose not to skip them completely
@@ -2191,7 +2188,7 @@ void CSimpleTextSubtitle::Add(CStringW str, bool fUnicode, int start, int end, C
     size_t segmentsCount = m_segments.GetCount();
 
     if (segmentsCount == 0) { // First segment
-        n = (int)__super::Add(sub);
+        n = (int)CAtlArray<STSEntry>::Add(sub);
         STSSegment stss(start, end);
         stss.subs.Add(n);
         m_segments.Add(stss);
@@ -2201,7 +2198,7 @@ void CSimpleTextSubtitle::Add(CStringW str, bool fUnicode, int start, int end, C
         STSSegment* segmentsEnd = segmentsStart + segmentsCount;
         STSSegment* segment = std::lower_bound(segmentsStart, segmentsEnd, start, SegmentCompStart);
 
-        n = (int)__super::Add(sub);
+        n = (int)CAtlArray<STSEntry>::Add(sub);
 
         size_t i = segment - segmentsStart;
         if (i > 0 && m_segments[i - 1].end > start) {
@@ -2215,7 +2212,7 @@ void CSimpleTextSubtitle::Add(CStringW str, bool fUnicode, int start, int end, C
         else if (i < segmentsCount && start < m_segments[i].start) {
             // The new entry doesn't start in an existing segment.
             // It might even not overlap with any segment at all
-            STSSegment stss(start, min(end, m_segments[i].start));
+            STSSegment stss(start, std::min(end, m_segments[i].start));
             stss.subs.Add(n);
             m_segments.InsertAt(i, stss);
             i++;
@@ -2268,7 +2265,7 @@ void CSimpleTextSubtitle::Add(CStringW str, bool fUnicode, int start, int end, C
         if (end > m_segments[i - 1].end) {
             // The new entry ends after the last overlapping segment.
             // It might even not overlap with any segment at all
-            STSSegment stss(max(start, m_segments[i - 1].end), end);
+            STSSegment stss(std::max(start, m_segments[i - 1].end), end);
             stss.subs.Add(n);
             m_segments.InsertAt(i, stss);
         }
@@ -3196,7 +3193,7 @@ STSStyle::STSStyle()
 }
 
 #ifdef _VSMOD
-STSStyle::STSStyle(STSStyle& s)
+STSStyle::STSStyle(const STSStyle& s)
 {
     SetDefault();
     mod_CopyStyleFrom(s);
@@ -3306,7 +3303,7 @@ bool STSStyle::IsFontStyleEqual(STSStyle& s)
 }
 
 #ifdef _VSMOD
-void STSStyle::mod_CopyStyleFrom(STSStyle& s)
+void STSStyle::mod_CopyStyleFrom(const STSStyle& s)
 {
     marginRect = s.marginRect;
     scrAlignment = s.scrAlignment;
@@ -3360,9 +3357,10 @@ void STSStyle::mod_CopyStyleFrom(STSStyle& s)
     fontShiftY = s.fontShiftY;
 }
 
-void STSStyle::operator = (STSStyle& s)
+STSStyle& STSStyle::operator = (const STSStyle& s)
 {
     mod_CopyStyleFrom(s);
+    return *this;
 }
 #endif
 

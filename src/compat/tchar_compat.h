@@ -16,8 +16,10 @@
 
 /* Identity in a Unicode build. Kept as functions rather than macros so the
  * call sites read the same as before. */
-inline const CStringW& WToT(const CStringW& s) { return s; }
-inline const CStringW& TToW(const CStringW& s) { return s; }
+/* By value, not by const reference: call sites chain non-const CString
+ * methods onto the result, e.g. WToT(x).TrimLeft('#'). */
+inline CStringW WToT(const CStringW& s) { return s; }
+inline CStringW TToW(const CStringW& s) { return s; }
 
 inline CStringA WToA(const CStringW& s) { return CStringA(s); }
 inline CStringW AToW(const CStringA& s) { return CStringW(s); }
@@ -89,8 +91,9 @@ public:
     void Free() { delete[] m_p; m_p = nullptr; }
     T* Detach() { T* p = m_p; m_p = nullptr; return p; }
 
+    /* No operator[]: the implicit T* conversion already indexes, and
+     * declaring both makes every pData[i] ambiguous. */
     operator T*() const { return m_p; }
-    T& operator[](size_t i) const { return m_p[i]; }
 
     T* m_p;
 };

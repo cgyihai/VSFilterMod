@@ -19,18 +19,20 @@
  *
  */
 
-#include "stdafx.h"
-#include "..\dsutil\text.h"
-#include <afxdlgs.h>
-#include <atlpath.h>
-#include <limits>
-#include "resource.h"
-#include "..\subtitles\VobSubFile.h"
-#include "..\subtitles\RTS.h"
-#include "..\subtitles\SSF.h"
-#include "..\SubPic\MemSubPic.h"
+#include "../compat/vsfm_compat.h"
+#include "../subtitles/RTS.h"
 
+#include <limits>
+
+/* Visibility of the eight csri_* entry points. On ELF and Mach-O the build
+ * hides everything else, so the CSRI loader's dlsym() finds exactly the ABI
+ * and none of VSFilter's internals leak into the host's symbol namespace --
+ * which matters when the host is Aegisub, itself linked against libass. */
+#if defined(_WIN32)
 #define CSRIAPI extern "C" __declspec(dllexport)
+#else
+#define CSRIAPI extern "C" __attribute__((visibility("default")))
+#endif
 #define CSRI_OWN_HANDLES
 typedef const char *csri_rend;
 extern "C" struct csri_vsfilter_inst
@@ -40,7 +42,11 @@ extern "C" struct csri_vsfilter_inst
     CSize script_res;
     CSize screen_res;
     CRect video_rect;
-    enum csri_pixfmt pixfmt;
+    /* Holds a csri_pixfmt. Stored as int because this struct has to be
+     * complete before csri.h is included (CSRI_OWN_HANDLES), and an
+     * elaborated `enum csri_pixfmt` forward reference is an MSVC extension
+     * that ISO C++ rejects. */
+    int pixfmt;
     size_t readorder;
 };
 typedef struct csri_vsfilter_inst csri_inst;
@@ -54,40 +60,36 @@ static csri_rend csri_vsfilter = "vsfilter";
 
 CSRIAPI csri_inst *csri_open_file(csri_rend *renderer, const char *filename, struct csri_openflag *flags)
 {
-    int namesize;
-    wchar_t *namebuf;
+    (void)renderer; (void)flags;
+    if(!filename) return 0;
 
-    namesize = MultiByteToWideChar(CP_UTF8, 0, filename, -1, NULL, 0);
-    if(!namesize)
-        return 0;
-    namesize++;
-    namebuf = new wchar_t[namesize];
-    MultiByteToWideChar(CP_UTF8, 0, filename, -1, namebuf, namesize);
+    /* CSRI specifies UTF-8 paths. */
+    const CStringW path = UTF8To16(filename);
+    if(path.IsEmpty()) return 0;
 
     csri_inst *inst = new csri_inst();
     inst->cs = new CCritSec();
     inst->rts = new CRenderedTextSubtitle(inst->cs);
-    if(inst->rts->Open(CString(namebuf), DEFAULT_CHARSET))
+
+    if(inst->rts->Open(CString(path), DEFAULT_CHARSET))
     {
-        delete[] namebuf;
         inst->readorder = 0;
         return inst;
     }
-    else
-    {
-        delete[] namebuf;
-        delete inst->rts;
-        delete inst->cs;
-        delete inst;
-        return 0;
-    }
+
+    delete inst->rts;
+    delete inst->cs;
+    delete inst;
+    return 0;
 }
 
 
 CSRIAPI csri_inst *csri_open_mem(csri_rend *renderer, const void *data, size_t length, struct csri_openflag *flags)
 {
-    // This is actually less effecient than opening a file, since this first writes the memory data to a temp file,
-    // then opens that file and parses from that.
+    (void)renderer; (void)flags;
+    /* Parses straight out of `data`; CSimpleTextSubtitle::Open no longer
+     * spools it to a temp file first. This is the path Aegisub drives on
+     * every edit. */
     csri_inst *inst = new csri_inst();
     inst->cs = new CCritSec();
     inst->rts = new CRenderedTextSubtitle(inst->cs);

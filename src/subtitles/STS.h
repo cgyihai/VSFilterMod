@@ -191,7 +191,7 @@ public:
 
     STSStyle();
 #ifdef _VSMOD
-    STSStyle(STSStyle& s);
+    STSStyle(const STSStyle& s);
 #endif
 
     void SetDefault();
@@ -199,9 +199,9 @@ public:
     bool operator == (STSStyle& s);
     bool IsFontStyleEqual(STSStyle& s);
 #ifdef _VSMOD
-    void mod_CopyStyleFrom(STSStyle& s);
+    void mod_CopyStyleFrom(const STSStyle& s);
 
-    void operator = (STSStyle& s);
+    STSStyle& operator = (const STSStyle& s);
 #endif
     void operator = (LOGFONT& lf);
 

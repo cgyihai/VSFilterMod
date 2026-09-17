@@ -56,11 +56,19 @@ struct FontDesc
     bool underline = false;
     bool strikeOut = false;
 
+    /* LOGFONT::lfOrientation, in tenths of a degree counter-clockwise. Drives
+     * VSFilterMod's \forient tag (patch m007), which on Windows worked by
+     * putting the HDC in GM_ADVANCED so GDI rotated each glyph in place while
+     * leaving the baseline horizontal. Reproduced here as a per-glyph outline
+     * transform. */
+    int orientation = 0;
+
     bool operator==(const FontDesc& o) const
     {
         return height == o.height && weight == o.weight && charSet == o.charSet
             && italic == o.italic && underline == o.underline
-            && strikeOut == o.strikeOut && faceName == o.faceName;
+            && strikeOut == o.strikeOut && orientation == o.orientation
+            && faceName == o.faceName;
     }
 };
 

@@ -83,6 +83,7 @@ class CStringT
 {
 public:
     typedef T XCHAR;
+    typedef typename std::conditional<std::is_same<T, char>::value, wchar_t, char>::type OtherT;
     typedef CharTraitsOf<T> Traits;
     typedef typename Traits::StringType StringType;
 
@@ -364,9 +365,59 @@ public:
     CStringT& operator+=(const T* p) { if (p) m_str += p; return *this; }
     CStringT& operator+=(T ch) { m_str += ch; return *this; }
 
+    /* Comparison and concatenation are hidden friends rather than free
+     * function templates so that implicit conversions apply to the *other*
+     * operand. ATL relies on this and so does the tag parser, which writes
+     * things like `cmd == "1c"` (a narrow literal against a CStringW) and
+     * `p != '0'` (a narrow character). Template argument deduction would
+     * reject both. */
+    friend bool operator==(const CStringT& a, const CStringT& b) { return a.m_str == b.m_str; }
+    friend bool operator!=(const CStringT& a, const CStringT& b) { return a.m_str != b.m_str; }
+    friend bool operator< (const CStringT& a, const CStringT& b) { return a.m_str <  b.m_str; }
+    friend bool operator> (const CStringT& a, const CStringT& b) { return a.m_str >  b.m_str; }
+    friend bool operator<=(const CStringT& a, const CStringT& b) { return a.m_str <= b.m_str; }
+    friend bool operator>=(const CStringT& a, const CStringT& b) { return a.m_str >= b.m_str; }
+
+    /* Overloads taking the raw pointer are required, not merely convenient:
+     * CStringT converts implicitly to const T*, so without an exact match
+     * `str == L"x"` is ambiguous between the built-in pointer comparison
+     * (converting the left side) and the CStringT comparison (converting the
+     * right side). ATL declares the same pair for the same reason. */
+    friend bool operator==(const CStringT& a, const T* p) { return a.m_str == StringType(p ? p : (const T*)Empties()); }
+    friend bool operator!=(const CStringT& a, const T* p) { return !(a == p); }
+    friend bool operator==(const T* p, const CStringT& a) { return a == p; }
+    friend bool operator!=(const T* p, const CStringT& a) { return !(a == p); }
+    friend bool operator< (const CStringT& a, const T* p) { return a.m_str <  StringType(p ? p : (const T*)Empties()); }
+    friend bool operator> (const CStringT& a, const T* p) { return a.m_str >  StringType(p ? p : (const T*)Empties()); }
+
+    /* Narrow literal against a wide string (and vice versa); the tree does
+     * this in a handful of tag comparisons. */
+    friend bool operator==(const CStringT& a, const OtherT* p) { return a == CStringT(p); }
+    friend bool operator!=(const CStringT& a, const OtherT* p) { return !(a == CStringT(p)); }
+    friend bool operator==(const OtherT* p, const CStringT& a) { return a == CStringT(p); }
+    friend bool operator!=(const OtherT* p, const CStringT& a) { return !(a == CStringT(p)); }
+
+    friend bool operator==(const CStringT& a, T ch) { return a.m_str.size() == 1 && a.m_str[0] == ch; }
+    friend bool operator!=(const CStringT& a, T ch) { return !(a == ch); }
+    friend bool operator==(T ch, const CStringT& a) { return a == ch; }
+    friend bool operator!=(T ch, const CStringT& a) { return !(a == ch); }
+
+    friend CStringT operator+(const CStringT& a, const CStringT& b)
+    { CStringT r(a); r += b; return r; }
+    friend CStringT operator+(const CStringT& a, const T* p)
+    { CStringT r(a); r += p; return r; }
+    friend CStringT operator+(const T* p, const CStringT& b)
+    { CStringT r(p); r += b; return r; }
+    friend CStringT operator+(const CStringT& a, T ch)
+    { CStringT r(a); r += ch; return r; }
+    friend CStringT operator+(T ch, const CStringT& b)
+    { CStringT r; r += ch; r += b; return r; }
+
     const StringType& str() const { return m_str; }
 
 private:
+    static const T* Empties() { static const T e[1] = { (T)0 }; return e; }
+
     static size_t OtherLen(const char* p) { return std::strlen(p); }
     static size_t OtherLen(const wchar_t* p) { return std::wcslen(p); }
 
@@ -385,49 +436,6 @@ template <> inline void CStringT<wchar_t>::AssignOther(const wchar_t*, size_t) {
 
 template <> inline std::string  CStringT<char>::NormalizeFormat(const char* f) { return NormalizeNarrowFormat(f); }
 template <> inline std::wstring CStringT<wchar_t>::NormalizeFormat(const wchar_t* f) { return NormalizeWideFormat(f); }
-
-// -- free operators ---------------------------------------------------------
-
-template <typename T>
-inline CStringT<T> operator+(const CStringT<T>& a, const CStringT<T>& b)
-{ CStringT<T> r(a); r += b; return r; }
-
-template <typename T>
-inline CStringT<T> operator+(const CStringT<T>& a, const T* b)
-{ CStringT<T> r(a); r += b; return r; }
-
-template <typename T>
-inline CStringT<T> operator+(const T* a, const CStringT<T>& b)
-{ CStringT<T> r(a); r += b; return r; }
-
-template <typename T>
-inline CStringT<T> operator+(const CStringT<T>& a, T b)
-{ CStringT<T> r(a); r += b; return r; }
-
-template <typename T>
-inline CStringT<T> operator+(T a, const CStringT<T>& b)
-{ CStringT<T> r(a, 1); r += b; return r; }
-
-#define VSFM_STR_CMP(op)                                                        \
-    template <typename T>                                                       \
-    inline bool operator op(const CStringT<T>& a, const CStringT<T>& b)          \
-    { return a.str() op b.str(); }                                               \
-    template <typename T>                                                       \
-    inline bool operator op(const CStringT<T>& a, const T* b)                    \
-    { return a.str() op (b ? typename CStringT<T>::StringType(b)                 \
-                            : typename CStringT<T>::StringType()); }             \
-    template <typename T>                                                       \
-    inline bool operator op(const T* a, const CStringT<T>& b)                    \
-    { return (a ? typename CStringT<T>::StringType(a)                            \
-                : typename CStringT<T>::StringType()) op b.str(); }
-
-VSFM_STR_CMP(==)
-VSFM_STR_CMP(!=)
-VSFM_STR_CMP(<)
-VSFM_STR_CMP(>)
-VSFM_STR_CMP(<=)
-VSFM_STR_CMP(>=)
-#undef VSFM_STR_CMP
 
 } // namespace vsfm
 
