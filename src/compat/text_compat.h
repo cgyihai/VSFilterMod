@@ -30,6 +30,12 @@ int WideCharToMultiByte(UINT codePage, DWORD flags, const wchar_t* wide, int cch
 CStringW UTF8To16(LPCSTR utf8);
 CStringA UTF16To8(LPCWSTR utf16);
 
+/* Full path of the running executable, or an empty string if it cannot be
+ * determined. Replaces GetModuleFileName(0, ...) in the "Update Details"
+ * handler, which gates a script-supplied resource path on the host being
+ * Aegisub. */
+CStringW HostExecutablePath();
+
 // ---------------------------------------------------------------------------
 // Explode / Implode, unchanged in behaviour from dsutil/text.h
 // ---------------------------------------------------------------------------

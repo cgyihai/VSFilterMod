@@ -44,24 +44,28 @@ inline CStringW AToT(const CStringA& s) { return CStringW(s); }
 #define _stscanf   swscanf
 #define _snwprintf swprintf
 
-/* MSVC secure-CRT spellings used in the LOGFONT conversions. */
-#define _TRUNCATE ((size_t)-1)
+#endif // !_WIN32
 
-inline void strncpy_s(char* dst, size_t cap, const char* src, size_t)
+/* Bounded copy into a fixed-size buffer, always NUL terminating.
+ *
+ * The LOGFONT conversions used MSVC's strncpy_s/wcsncpy_s. Defining those
+ * names ourselves on POSIX is a trap: any libc that implements Annex K
+ * declares them with a different signature, and the build then fails on a
+ * redeclaration rather than on anything meaningful. A distinct name sidesteps
+ * the collision on every platform. */
+inline void VsfmCopyFixed(char* dst, size_t cap, const char* src)
 {
     if (!dst || cap == 0) return;
     std::strncpy(dst, src ? src : "", cap - 1);
     dst[cap - 1] = '\0';
 }
 
-inline void wcsncpy_s(wchar_t* dst, size_t cap, const wchar_t* src, size_t)
+inline void VsfmCopyFixed(wchar_t* dst, size_t cap, const wchar_t* src)
 {
     if (!dst || cap == 0) return;
     std::wcsncpy(dst, src ? src : L"", cap - 1);
     dst[cap - 1] = L'\0';
 }
-
-#endif // !_WIN32
 
 /* Screen DPI used to be read from a live HDC via GetDeviceCaps(LOGPIXELSY).
  * It is pinned here instead: .ass point sizes are defined against 96 DPI, and

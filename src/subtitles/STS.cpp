@@ -1726,19 +1726,32 @@ static bool OpenSubStationAlpha(CTextFile* file, CSimpleTextSubtitle& ret, int C
         }
         else if (entry == L"update details")
         {
+            /* A script can point at a directory of resources, but only when
+             * the host is Aegisub -- otherwise any .ass file could steer an
+             * arbitrary player at an arbitrary path. The check is on the
+             * executable's own file name. */
             if (buff.IsEmpty()) continue;
-            std::vector<TCHAR> tmp(MAX_PATH);
-            size_t buflen = GetModuleFileName(0, tmp.data(), MAX_PATH);
-            CString tmpstr = tmp.data();
+
+            CString tmpstr = HostExecutablePath();
             tmpstr.MakeLower();
+
+            /* Look at the last path component only, and accept either
+             * separator so this works on POSIX too. */
             int lastSlash = tmpstr.ReverseFind(TEXT('\\'));
+            const int lastFwd = tmpstr.ReverseFind(TEXT('/'));
+            if (lastFwd > lastSlash) lastSlash = lastFwd;
             if (lastSlash > 0)
                 tmpstr = tmpstr.Mid(lastSlash);
+
             if (tmpstr.Find(TEXT("aegisub")) >= 0)
             {
                 CString resPath = GetStr(buff).Trim();
-                if (resPath.GetLength() > 0 && resPath[resPath.GetLength() - 1] != TEXT('\\'))
-                    resPath += '\\';
+                if (!resPath.IsEmpty())
+                {
+                    const TCHAR last = resPath[resPath.GetLength() - 1];
+                    if (last != TEXT('\\') && last != TEXT('/'))
+                        resPath += VSFM_PATH_SEPARATOR;
+                }
                 ret.m_resPath = resPath;
             }
         }
@@ -3379,7 +3392,7 @@ void STSStyle::operator = (LOGFONT& lf)
 LOGFONTA& operator <<= (LOGFONTA& lfa, STSStyle& s)
 {
     lfa.lfCharSet = s.charSet;
-    strncpy_s(lfa.lfFaceName, LF_FACESIZE, CStringA(s.fontName), _TRUNCATE);
+    VsfmCopyFixed(lfa.lfFaceName, LF_FACESIZE, CStringA(s.fontName));
     lfa.lfHeight = -MulDiv((int)(s.fontSize + 0.5), VSFM_LOGPIXELSY, 72);
     lfa.lfWeight = s.fontWeight;
     lfa.lfItalic = s.fItalic ? -1 : 0;
@@ -3391,7 +3404,7 @@ LOGFONTA& operator <<= (LOGFONTA& lfa, STSStyle& s)
 LOGFONTW& operator <<= (LOGFONTW& lfw, STSStyle& s)
 {
     lfw.lfCharSet = s.charSet;
-    wcsncpy_s(lfw.lfFaceName, LF_FACESIZE, CStringW(s.fontName), _TRUNCATE);
+    VsfmCopyFixed(lfw.lfFaceName, LF_FACESIZE, CStringW(s.fontName));
     lfw.lfHeight = -MulDiv((int)(s.fontSize + 0.5), VSFM_LOGPIXELSY, 72);
     lfw.lfWeight = s.fontWeight;
     lfw.lfItalic = s.fItalic ? -1 : 0;

@@ -174,6 +174,23 @@ if get_option('tests')
     test('csri-abi', csri_loader_test,
          args : [csri_lib.full_path()],
          depends : [csri_lib])
+
+    # Type-checks the POSIX branch of the compatibility layer while building
+    # on Windows, by undefining _WIN32 after the system headers are in. It
+    # cannot stand in for a real Linux or macOS build -- iconv, fontconfig,
+    # CoreText and the 32-bit wchar_t assumption are all out of its reach --
+    # but it does catch typos in code a Windows build never instantiates.
+    #
+    # Compile only: its objects use the POSIX manglings (DWORD is uint32_t
+    # there, not unsigned long), so they cannot link against the rest of a
+    # Windows build. Compiling is the whole point.
+    if host_system == 'windows'
+        static_library('posix_headers_probe',
+            files('tests/posix_headers_probe.cpp'),
+            include_directories : inc,
+            dependencies : deps,
+            build_by_default : true)
+    endif
 endif
 
 summary({

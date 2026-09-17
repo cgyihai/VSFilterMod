@@ -318,7 +318,7 @@ void CWord::Transform(CPoint org)
             // randomize
             if(xrnd!=0 || yrnd!=0 || zrnd!=0)
             {
-                __declspec(align(16)) float rx[4], ry[4], rz[4]; 
+                alignas(16) float rx[4], ry[4], rz[4];
                 for(int k=0;k<4;k++)
                 {
                     rx[k] = xrnd > 0 ? (xrnd - rand() % (int)(xrnd * 2 + 1)) : 0;

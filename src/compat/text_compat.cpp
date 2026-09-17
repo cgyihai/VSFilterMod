@@ -216,3 +216,46 @@ CStringA UTF16To8(LPCWSTR utf16)
     if (!utf16) return CStringA();
     return CStringA(vsfm::W2U8(utf16, std::wcslen(utf16)));
 }
+
+// ---------------------------------------------------------------------------
+
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#else
+#include <unistd.h>
+#endif
+
+CStringW HostExecutablePath()
+{
+#if defined(_WIN32)
+    std::vector<wchar_t> buf(MAX_PATH);
+    for (;;) {
+        const DWORD n = GetModuleFileNameW(nullptr, buf.data(), (DWORD)buf.size());
+        if (n == 0) return CStringW();
+        if (n < buf.size()) return CStringW(buf.data(), (int)n);
+        buf.resize(buf.size() * 2);          // truncated; try again
+    }
+
+#elif defined(__APPLE__)
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);    // asks for the required length
+    if (size == 0) return CStringW();
+
+    std::vector<char> buf(size + 1, '\0');
+    if (_NSGetExecutablePath(buf.data(), &size) != 0) return CStringW();
+    return CStringW(vsfm::U82W(buf.data(), std::strlen(buf.data())));
+
+#else
+    /* /proc/self/exe is Linux; readlink does not NUL terminate. */
+    std::vector<char> buf(1024);
+    for (;;) {
+        const ssize_t n = readlink("/proc/self/exe", buf.data(), buf.size());
+        if (n < 0) return CStringW();
+        if ((size_t)n < buf.size())
+            return CStringW(vsfm::U82W(buf.data(), (size_t)n));
+        buf.resize(buf.size() * 2);
+    }
+#endif
+}

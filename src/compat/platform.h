@@ -17,6 +17,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cwchar>
+#include <cwctype>
 #include <climits>
 
 #if defined(_WIN32)
@@ -41,7 +42,6 @@ typedef LONGLONG REFERENCE_TIME;
 typedef unsigned char       BYTE;
 typedef unsigned short      WORD;
 typedef unsigned int        UINT;
-typedef unsigned long       DWORD_PTR_UNUSED_;
 typedef uint32_t            DWORD;
 typedef int32_t             LONG;
 typedef int64_t             LONGLONG;
@@ -67,6 +67,18 @@ typedef const void*         LPCVOID;
 
 #ifndef MAXLONG
 #define MAXLONG  0x7fffffff
+#endif
+
+/* Locale id. Carried around in CSimpleTextSubtitle::m_lcid, which only the
+ * DirectShow stream-info path ever populated; kept so the field still has a
+ * type. */
+typedef DWORD LCID;
+
+#ifndef MAX_PATH
+#define MAX_PATH 4096
+#endif
+#ifndef _MAX_PATH
+#define _MAX_PATH MAX_PATH
 #endif
 
 typedef struct tagPOINT { LONG x, y; } POINT, *LPPOINT;
@@ -153,6 +165,8 @@ typedef struct tagLOGFONTA
     char lfFaceName[LF_FACESIZE];
 } LOGFONTA;
 
+typedef LOGFONTW LOGFONT;   // the tree is Unicode-only, as on Windows
+
 /* Only referenced when building the LOGFONT; the FreeType backend ignores them. */
 #define OUT_DEFAULT_PRECIS   0
 #define OUT_TT_PRECIS        4
@@ -196,6 +210,12 @@ typedef const TCHAR* LPCTSTR;
 #define TRACE(...) ((void)0)
 #endif
 
+#if defined(_WIN32)
+#define VSFM_PATH_SEPARATOR _T('\\')
+#else
+#define VSFM_PATH_SEPARATOR _T('/')
+#endif
+
 /* Came from dsutil/SharedInclude.h; used by the \move and rotation maths. */
 #ifndef PI
 #define PI 3.1415926535897932384626433832795
@@ -212,10 +232,38 @@ inline int MulDiv(int a, int b, int c)
 }
 #endif
 
-/* Case-insensitive wide compare: POSIX spells it differently. */
+/* Case-insensitive comparisons.
+ *
+ * The narrow ones map onto POSIX. The wide ones are implemented here rather
+ * than mapped onto wcscasecmp/wcsncasecmp: those are POSIX.1-2008, but glibc
+ * only declares them when _GNU_SOURCE or _POSIX_C_SOURCE >= 200809L is set and
+ * macOS wants _DARWIN_C_SOURCE, so relying on them makes the build depend on
+ * feature-test macros the host may not define. */
 #if !defined(_WIN32)
-#define _wcsnicmp wcsncasecmp
-#define _wcsicmp  wcscasecmp
+
+#include <strings.h>
 #define _stricmp  strcasecmp
 #define _strnicmp strncasecmp
+
+inline int _wcsnicmp(const wchar_t* a, const wchar_t* b, size_t n)
+{
+    for (size_t i = 0; i < n; ++i) {
+        const wint_t ca = towlower((wint_t)a[i]);
+        const wint_t cb = towlower((wint_t)b[i]);
+        if (ca != cb) return ca < cb ? -1 : 1;
+        if (ca == 0) return 0;
+    }
+    return 0;
+}
+
+inline int _wcsicmp(const wchar_t* a, const wchar_t* b)
+{
+    for (;; ++a, ++b) {
+        const wint_t ca = towlower((wint_t)*a);
+        const wint_t cb = towlower((wint_t)*b);
+        if (ca != cb) return ca < cb ? -1 : 1;
+        if (ca == 0) return 0;
+    }
+}
+
 #endif
