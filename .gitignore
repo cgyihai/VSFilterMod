@@ -13,3 +13,5 @@ build-ci/
 dist/
 out/
 thirdparty/
+subprojects/*.wrap.redirect
+subprojects/zlib.wrap
