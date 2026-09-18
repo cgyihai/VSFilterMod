@@ -9,3 +9,7 @@ subprojects/*/
 *.dylib
 *.dll
 *.exe
+build-ci/
+dist/
+out/
+thirdparty/

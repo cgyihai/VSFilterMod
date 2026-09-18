@@ -99,6 +99,36 @@ Restart Aegisub, then pick **CSRI/vsfiltermod_textsub** under
 plugin was not found or failed to load; on Linux and macOS run Aegisub from a
 terminal to see the loader's warnings.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` builds and tests six configurations:
+
+| Job | Toolchain | Font backend | Dependencies |
+| --- | --- | --- | --- |
+| Linux x86_64 | GCC | fontconfig | apt |
+| Linux aarch64 | GCC | fontconfig | apt + sse2neon |
+| macOS arm64 | Clang | CoreText | Homebrew + sse2neon |
+| macOS x86_64 | Clang | CoreText | Homebrew |
+| Windows x86_64 (MSVC) | MSVC | DirectWrite | Meson subprojects, all static |
+| Windows x86_64 (MinGW) | GCC | DirectWrite | MSYS2 |
+
+Each job runs the `csri-abi` test — which loads the plugin the way Aegisub's
+loader does and renders through it — then renders `tests/smoke.ass` to BDN+XML
+and validates the result with `tests/check_bdnxml.py`. That validator rejects
+a fully transparent image, so a platform whose font lookup silently returns
+nothing fails the build instead of producing empty subtitles.
+
+Two notes:
+
+* **ARM Linux runners are free for public repositories only.** If this repo is
+  private, delete the `ubuntu-24.04-arm` matrix entry, or the job will queue
+  forever rather than fail.
+* The **MSVC artefact is the redistributable one**: freetype, libpng, zlib and
+  the CRT are all linked statically, so `vsfiltermod.dll` is a single file with
+  no dependencies beyond `DWrite.dll`, `KERNEL32.dll`, `USER32.dll` and
+  `msvcrt.dll`. The MinGW artefact links against MSYS2's DLLs and is a build
+  check only.
+
 ## Verifying the plugin outside Aegisub
 
 `tests/csri_loader_test.c` loads the shared object exactly the way the CSRI

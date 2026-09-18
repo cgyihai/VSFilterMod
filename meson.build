@@ -54,6 +54,19 @@ if host_cpu == 'x86'
     endif
 endif
 
+# A CSRI plugin is dlopen'd by the host application, which will not have the
+# compiler's runtime DLLs on its search path. Link them in statically so the
+# plugin is a single file that can just be dropped into a csri directory.
+# (MSVC is handled by b_vscrt; only the GCC-family Windows toolchains need
+# this.)
+if host_system == 'windows' and cxx.get_id() != 'msvc'
+    add_project_link_arguments(
+        '-static-libgcc', '-static-libstdc++',
+        '-Wl,-Bstatic,--whole-archive', '-lwinpthread',
+        '-Wl,--no-whole-archive,-Bdynamic',
+        language : ['c', 'cpp'])
+endif
+
 # ---------------------------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------------------------
