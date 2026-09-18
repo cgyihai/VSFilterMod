@@ -15,3 +15,4 @@ out/
 thirdparty/
 subprojects/*.wrap.redirect
 subprojects/zlib.wrap
+subprojects/.wraplock
