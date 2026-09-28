@@ -206,6 +206,15 @@ Point the first at Aegisub's `csri/VSFilterMod.dll` and the second at this
 build. Give upstream a script **with a UTF-8 BOM**: through CSRI it throws an
 unhandled C++ exception on a BOM-less file.
 
+`tests/frs.ass` and `tests/vertical.ass` (one line per second, sample at
+`n.5`) exercise the two places where the engine reproduces undocumented GDI
+layout: `\frs` at angles all round the circle, with CJK, `\fsp`, bold,
+italic, scaling and wrapping, and `@` vertical faces with punctuation,
+pinyin, Greek and fullwidth forms. They use SimSun, SimHei, Microsoft
+YaHei, DengXian, MS Gothic, Yu Gothic, Malgun Gothic and Times New Roman,
+so run them where those are installed. Against upstream they measured IoU
+0.977–0.999 and 0.967–1.000.
+
 ## What was removed
 
 This tree is a cut-down VSFilterMod. Everything specific to DirectShow

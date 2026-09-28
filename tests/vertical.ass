@@ -1,0 +1,28 @@
+﻿[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: V,@Microsoft YaHei,64,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: VSim,@SimSun,64,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: VHei,@SimHei,64,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: VGoth,@MS Gothic,64,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: VYu,@Yu Gothic,64,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: VKor,@Malgun Gothic,64,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: VDeng,@DengXian,64,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:01.00,V,,0,0,0,,竖排文字测试
+Dialogue: 0,0:00:01.00,0:00:02.00,V,,0,0,0,,标点：“引号”，（括号）。《书名》！
+Dialogue: 0,0:00:02.00,0:00:03.00,VSim,,0,0,0,,宋体竖排，Latin mixed。
+Dialogue: 0,0:00:03.00,0:00:04.00,VHei,,0,0,0,,黑体【方括号】——破折号…
+Dialogue: 0,0:00:04.00,0:00:05.00,VGoth,,0,0,0,,縦書きのテキスト、句読点。
+Dialogue: 0,0:00:05.00,0:00:06.00,VYu,,0,0,0,,游ゴシック「かぎ括弧」ー
+Dialogue: 0,0:00:06.00,0:00:07.00,VKor,,0,0,0,,한국어 세로쓰기 (괄호)
+Dialogue: 0,0:00:07.00,0:00:08.00,VDeng,,0,0,0,,等线竖排～波浪号
+Dialogue: 0,0:00:08.00,0:00:09.00,V,,0,0,0,,pīnyīn αβγ ＡＢＣ 123
+Dialogue: 0,0:00:09.00,0:00:10.00,V,,0,0,0,,{\an7\pos(200,200)\fscx120}定位缩放竖排

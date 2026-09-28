@@ -1,0 +1,36 @@
+﻿[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: Bottom,Arial,64,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,40,1
+Style: Times,Times New Roman,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: CJK,Microsoft YaHei,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: Sim,SimSun,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\frs15}Rotated glyphs, quick fox
+Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,{\frs30}Rotated glyphs, quick fox
+Dialogue: 0,0:00:02.00,0:00:03.00,Default,,0,0,0,,{\frs45}Rotated glyphs, quick fox
+Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,{\frs60}Rotated glyphs, quick fox
+Dialogue: 0,0:00:04.00,0:00:05.00,Default,,0,0,0,,{\frs90}Rotated glyphs, quick fox
+Dialogue: 0,0:00:05.00,0:00:06.00,Default,,0,0,0,,{\frs-30}Rotated glyphs, quick fox
+Dialogue: 0,0:00:06.00,0:00:07.00,Default,,0,0,0,,{\frs135}Rotated glyphs, quick fox
+Dialogue: 0,0:00:07.00,0:00:08.00,Default,,0,0,0,,{\frs180}Rotated glyphs, quick fox
+Dialogue: 0,0:00:08.00,0:00:09.00,Default,,0,0,0,,{\frs270}Rotated glyphs, quick fox
+Dialogue: 0,0:00:09.00,0:00:10.00,Default,,0,0,0,,{\frs5}Rotated glyphs, quick fox
+Dialogue: 0,0:00:10.00,0:00:11.00,Times,,0,0,0,,{\frs40}Typography jumps over
+Dialogue: 0,0:00:11.00,0:00:12.00,CJK,,0,0,0,,{\frs30}旋转的字幕特效测试
+Dialogue: 0,0:00:12.00,0:00:13.00,Sim,,0,0,0,,{\frs75}旋转的字幕特效测试
+Dialogue: 0,0:00:13.00,0:00:14.00,Default,,0,0,0,,{\frs30\fsp8}Spaced out letters
+Dialogue: 0,0:00:14.00,0:00:15.00,Bottom,,0,0,0,,{\frs20}Two rotated words{\frs-20} and two more
+Dialogue: 0,0:00:15.00,0:00:16.00,Default,,0,0,0,,{\frs30\b1\i1}Bold italic rotated
+Dialogue: 0,0:00:16.00,0:00:17.00,Default,,0,0,0,,{\an7\pos(100,100)\frs50}Top-left anchored
+Dialogue: 0,0:00:17.00,0:00:18.00,Bottom,,0,0,0,,{\frs25}A longer subtitle line that has to wrap because it is much wider than the screen allows
+Dialogue: 0,0:00:18.00,0:00:19.00,Default,,0,0,0,,{\frs30\fscx150\fscy80}Scaled rotation
+Dialogue: 0,0:00:19.00,0:00:20.00,CJK,,0,0,0,,{\frs90}竖起来的字
