@@ -88,10 +88,11 @@ public:
 
         std::lock_guard<std::mutex> g(m_lock);
 
-        /* A leading '@' asks GDI for the vertical variant of a CJK face. The
-         * vertical glyph layout is not reproduced yet, but the face itself
-         * must still be found: matching "@Microsoft YaHei" literally fails,
-         * falls back to Arial, and every CJK character renders as a box. */
+        /* A leading '@' asks GDI for the vertical variant of a CJK face.
+         * FontEngine::OpenFont strips it before asking any provider and does
+         * the vertical layout itself; this is a second guard, because
+         * matching "@Microsoft YaHei" literally fails, falls back to Arial,
+         * and every CJK character renders as a box. */
         std::wstring name = family;
         if (!name.empty() && name[0] == L'@') name.erase(0, 1);
 

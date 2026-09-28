@@ -14,6 +14,7 @@
 #include FT_SYNTHESIS_H
 #include FT_TRUETYPE_TABLES_H
 
+#include <functional>
 #include <map>
 #include <mutex>
 #include <cstdio>
@@ -55,10 +56,22 @@ struct PathBuilder
     double ascent = 0.0;
     double cosA = 1.0, sinA = 0.0;
 
+    /* An '@' font's CJK glyph lies on its side, turned a quarter
+     * counter-clockwise: the point `vertOriginY` above the baseline goes to
+     * the pen, and the glyph's x = 0 goes `vertBottom` below the top of the
+     * cell. Both 26.6. See "Vertical ('@') fonts". */
+    bool sideways = false;
+    FT_Pos vertOriginY = 0;
+    FT_Pos vertBottom = 0;
+    int cellTop = 0;
+
     void Emit(FT_Pos x, FT_Pos y, BYTE type)
     {
         POINT p;
-        if (rotate) {
+        if (sideways) {
+            p.x = originX + Round26_6(penX + vertOriginY - y);
+            p.y = cellTop + Round26_6(vertBottom - x);
+        } else if (rotate) {
             const double qx = x / 64.0 - halfWidth;
             const double qy = y / 64.0 - ascent;
             p.x = (int)std::lround(pivotX + qx * cosA - qy * sinA);
@@ -205,6 +218,13 @@ public:
     double rotCos = 1.0;
     double rotSin = 0.0;
 
+    /* An '@' face: CJK glyphs lie on their side, in their GSUB 'vert' forms.
+     * See "Vertical ('@') fonts" below. */
+    bool vertical = false;
+    std::map<FT_UInt, FT_UInt> vertForms;
+    FT_Pos vertBottom = 0;      // 26.6: usWinAscent + |sTypoDescender|
+    mutable FT_Pos vertOriginY = 0;   // 26.6, of the glyph LoadGlyph last loaded
+
     /* In GDI path units (= pixels at the requested cell height). */
     int underlinePos = 0;       // distance below the baseline to the top edge
     int underlineThickness = 1;
@@ -242,6 +262,12 @@ public:
         FT_Int32 flags = FT_LOAD_NO_BITMAP | FT_LOAD_NO_HINTING;
         if (FT_Load_Glyph(face, gi, flags) != 0) return false;
         if (face->glyph->format != FT_GLYPH_FORMAT_OUTLINE) return false;
+
+        if (vertical) {
+            FT_BBox cbox;
+            FT_Outline_Get_CBox(&face->glyph->outline, &cbox);
+            vertOriginY = cbox.yMax + face->glyph->metrics.vertBearingY;
+        }
 
         /* GDI's simulated italic is a shear of 0.3397 (about 18.8 degrees),
          * measured against upstream VSFilterMod as constant across SimHei,
@@ -429,6 +455,174 @@ RotatedGlyph MeasureRotated(const FT_GlyphSlot slot, double c, double s, double 
 } // namespace
 
 // ---------------------------------------------------------------------------
+// Vertical ('@') fonts
+// ---------------------------------------------------------------------------
+//
+// A face name with a leading '@' asks GDI for the face's vertical variant.
+// Drawn on a horizontal run, as VSFilter draws everything, it keeps the plain
+// face's metrics, advances and extents, and leaves Latin text alone; the CJK
+// characters are laid on their side, a quarter turn counter-clockwise, in the
+// forms the font's GSUB 'vert' feature gives them. Probed against GDI on
+// SimSun, SimHei, KaiTi, FangSong, DengXian, Microsoft YaHei, MS Gothic, Yu
+// Gothic and Malgun Gothic, a turned glyph point (x, y) lands at
+//
+//     x' = pen + (vertical origin - y)       vertical origin = yMax + vmtx TSB
+//     y' = (usWinAscent + |sTypoDescender|) - x      from the top of the cell
+//
+// so the glyph's vertical origin, the top of its vertical em box, meets the
+// pen, and its left edge sits a typo-descender below the baseline. A turned
+// glyph steps by its vertical advance (vmtx), in the path and in
+// GetTextExtentPoint32 alike -- a proportional pinyin letter or Greek letter
+// takes a full em.
+
+namespace {
+
+/* The characters an '@' face turns: those that are double-byte in its code
+ * page. Measured over the BMP on SimSun, Microsoft YaHei, SimHei, DengXian,
+ * KaiTi and FangSong -- GBK, so pinyin letters, Greek and Cyrillic turn too --
+ * with the whole Han and Hangul blocks and the Hangul jamo added, which Malgun
+ * Gothic turns. Japanese and Korean faces turn a slightly different set: they
+ * leave Greek and Cyrillic upright. */
+bool TurnsInVerticalFont(uint32_t cp)
+{
+    static const uint32_t kRanges[][2] = {
+        { 0x00A2, 0x00A5 }, { 0x00A7, 0x00A8 }, { 0x00AF, 0x00B1 },
+        { 0x00B4, 0x00B5 }, { 0x00B7, 0x00B7 }, { 0x00C0, 0x00C1 },
+        { 0x00C8, 0x00CA }, { 0x00CC, 0x00CD }, { 0x00D2, 0x00D3 },
+        { 0x00D7, 0x00D7 }, { 0x00D9, 0x00DA }, { 0x00DC, 0x00DC },
+        { 0x00E0, 0x00E1 }, { 0x00E8, 0x00EA }, { 0x00EC, 0x00ED },
+        { 0x00F2, 0x00F3 }, { 0x00F7, 0x00F7 }, { 0x00F9, 0x00FA },
+        { 0x00FC, 0x00FC }, { 0x0100, 0x0101 }, { 0x0112, 0x0113 },
+        { 0x011A, 0x011B }, { 0x012A, 0x012B }, { 0x0144, 0x0144 },
+        { 0x0148, 0x0148 }, { 0x014C, 0x014D }, { 0x016A, 0x016B },
+        { 0x01CD, 0x01DC }, { 0x0251, 0x0251 }, { 0x0261, 0x0261 },
+        { 0x02C7, 0x02C7 }, { 0x02C9, 0x02CB }, { 0x02D9, 0x02D9 },
+        { 0x0391, 0x03A1 }, { 0x03A3, 0x03A9 }, { 0x03B1, 0x03C1 },
+        { 0x03C3, 0x03C9 }, { 0x0401, 0x0401 }, { 0x0410, 0x044F },
+        { 0x0451, 0x0451 }, { 0x1100, 0x11FF }, { 0x2010, 0x2010 },
+        { 0x2013, 0x2016 }, { 0x2018, 0x2022 }, { 0x2024, 0x2027 },
+        { 0x2030, 0x2030 }, { 0x2032, 0x2037 }, { 0x2039, 0x203E },
+        { 0x2044, 0x2044 }, { 0x2103, 0x2103 }, { 0x2105, 0x2105 },
+        { 0x2109, 0x2109 }, { 0x2113, 0x2113 }, { 0x2116, 0x2117 },
+        { 0x2121, 0x2122 }, { 0x2126, 0x2126 }, { 0x212E, 0x212E },
+        { 0x214D, 0x214E }, { 0x2160, 0x216B }, { 0x2170, 0x2179 },
+        { 0x2190, 0x2193 }, { 0x2196, 0x2199 }, { 0x2208, 0x2208 },
+        { 0x220F, 0x220F }, { 0x2211, 0x2211 }, { 0x2215, 0x2215 },
+        { 0x2219, 0x221A }, { 0x221D, 0x2220 }, { 0x2223, 0x2223 },
+        { 0x2225, 0x2225 }, { 0x2227, 0x222B }, { 0x222E, 0x222E },
+        { 0x2234, 0x2237 }, { 0x223D, 0x223D }, { 0x2248, 0x2248 },
+        { 0x224C, 0x224C }, { 0x2252, 0x2252 }, { 0x2260, 0x2261 },
+        { 0x2264, 0x2267 }, { 0x226E, 0x226F }, { 0x2295, 0x2295 },
+        { 0x2299, 0x2299 }, { 0x22A5, 0x22A5 }, { 0x22BF, 0x22BF },
+        { 0x2312, 0x2312 }, { 0x2460, 0x2469 }, { 0x2474, 0x249B },
+        { 0x2500, 0x254B }, { 0x2550, 0x2573 }, { 0x2581, 0x258F },
+        { 0x2593, 0x2595 }, { 0x25A0, 0x25A1 }, { 0x25AA, 0x25AB },
+        { 0x25B2, 0x25B3 }, { 0x25BC, 0x25BD }, { 0x25C6, 0x25C7 },
+        { 0x25CA, 0x25CC }, { 0x25CE, 0x25CF }, { 0x25E2, 0x25E6 },
+        { 0x2605, 0x2606 }, { 0x2609, 0x2609 }, { 0x2640, 0x2640 },
+        { 0x2642, 0x2642 }, { 0x2E80, 0x2FDF }, { 0x3001, 0x303F },
+        { 0x3041, 0x3096 }, { 0x3099, 0x30FF }, { 0x3105, 0x312D },
+        { 0x3130, 0x318F }, { 0x3190, 0x319F }, { 0x31F0, 0x31FF },
+        { 0x3220, 0x3231 }, { 0x3233, 0x3238 }, { 0x323A, 0x3243 },
+        { 0x3250, 0x325F }, { 0x3280, 0x3296 }, { 0x3298, 0x3298 },
+        { 0x329A, 0x32A3 }, { 0x32A9, 0x32CF }, { 0x3372, 0x3376 },
+        { 0x3380, 0x3387 }, { 0x338A, 0x338C }, { 0x338E, 0x338F },
+        { 0x3391, 0x3395 }, { 0x3399, 0x339A }, { 0x339C, 0x339E },
+        { 0x33A1, 0x33A1 }, { 0x33A7, 0x33AF }, { 0x33B4, 0x33BA },
+        { 0x33BC, 0x33C1 }, { 0x33C3, 0x33C7 }, { 0x33C9, 0x33CC },
+        { 0x33CE, 0x33D7 }, { 0x33D9, 0x33DF }, { 0x3400, 0x4DBF },
+        { 0x4E00, 0x9FFF }, { 0xAC00, 0xD7AF }, { 0xF900, 0xFAFF },
+        { 0xFE10, 0xFE19 }, { 0xFE30, 0xFE52 }, { 0xFE54, 0xFE57 },
+        { 0xFE59, 0xFE66 }, { 0xFE68, 0xFE6B }, { 0xFF01, 0xFF60 },
+        { 0xFFE0, 0xFFE6 }, { 0xFFE8, 0xFFEE }, { 0x20000, 0x3FFFF },
+    };
+    for (const auto& r : kRanges)
+        if (cp >= r[0] && cp <= r[1]) return true;
+    return false;
+}
+
+/* The single substitutions of the font's GSUB 'vert' feature ('vrt2' when
+ * there is no 'vert'), glyph to glyph. Lookup types 1 and 7-wrapping-1 only;
+ * that is all the vertical forms of the CJK fonts in use are made of. */
+std::map<FT_UInt, FT_UInt> ReadVertForms(FT_Face face)
+{
+    std::map<FT_UInt, FT_UInt> out;
+    const FT_ULong tag = FT_MAKE_TAG('G', 'S', 'U', 'B');
+    FT_ULong len = 0;
+    if (FT_Load_Sfnt_Table(face, tag, 0, nullptr, &len) != 0 || len < 10) return out;
+    std::vector<unsigned char> t(len);
+    if (FT_Load_Sfnt_Table(face, tag, 0, t.data(), &len) != 0) return out;
+
+    auto u16 = [&](size_t o) -> unsigned {
+        return o + 2 <= t.size() ? (unsigned)((t[o] << 8) | t[o + 1]) : 0u;
+    };
+    auto u32 = [&](size_t o) -> size_t { return ((size_t)u16(o) << 16) | u16(o + 2); };
+
+    /* Calls f(glyph, coverage index) for every glyph a Coverage table lists. */
+    auto coverage = [&](size_t at, const std::function<void(unsigned, unsigned)>& f) {
+        const unsigned format = u16(at), count = u16(at + 2);
+        if (format == 1) {
+            for (unsigned i = 0; i < count && at + 4 + 2 * i + 2 <= t.size(); ++i)
+                f(u16(at + 4 + 2 * i), i);
+        } else if (format == 2) {
+            for (unsigned i = 0; i < count && at + 4 + 6 * i + 6 <= t.size(); ++i) {
+                const size_t r = at + 4 + 6 * i;
+                const unsigned first = u16(r), last = u16(r + 2), index = u16(r + 4);
+                for (unsigned g = first; g <= last && g - first < 0x10000; ++g)
+                    f(g, index + (g - first));
+            }
+        }
+    };
+
+    auto singleSubst = [&](size_t at) {
+        const unsigned format = u16(at);
+        const size_t cov = at + u16(at + 2);
+        if (format == 1) {
+            const int delta = (int16_t)u16(at + 4);
+            coverage(cov, [&](unsigned g, unsigned) { out[g] = (FT_UInt)((g + delta) & 0xFFFF); });
+        } else if (format == 2) {
+            const unsigned count = u16(at + 4);
+            coverage(cov, [&](unsigned g, unsigned i) {
+                if (i < count) out[g] = u16(at + 6 + 2 * i);
+            });
+        }
+    };
+
+    const size_t featureList = u16(6), lookupList = u16(8);
+    std::vector<unsigned> lookups;
+    for (const char* want : { "vert", "vrt2" }) {
+        const unsigned features = u16(featureList);
+        for (unsigned i = 0; i < features; ++i) {
+            const size_t rec = featureList + 2 + 6 * i;
+            if (rec + 6 > t.size() || std::memcmp(&t[rec], want, 4) != 0) continue;
+            const size_t feature = featureList + u16(rec + 4);
+            const unsigned n = u16(feature + 2);
+            for (unsigned k = 0; k < n; ++k) lookups.push_back(u16(feature + 4 + 2 * k));
+        }
+        if (!lookups.empty()) break;
+    }
+
+    for (unsigned li : lookups) {
+        if (li >= u16(lookupList)) continue;
+        const size_t lookup = lookupList + u16(lookupList + 2 + 2 * li);
+        const unsigned type = u16(lookup), subtables = u16(lookup + 4);
+        for (unsigned k = 0; k < subtables; ++k) {
+            size_t sub = lookup + u16(lookup + 6 + 2 * k);
+            if (type == 7) {
+                if (u16(sub) != 1 || u16(sub + 2) != 1) continue;
+                sub += u32(sub + 4);
+            } else if (type != 1) {
+                continue;
+            }
+            singleSubst(sub);
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
 // FontFace
 // ---------------------------------------------------------------------------
 
@@ -490,8 +684,12 @@ bool FontFace::TextExtent(const wchar_t* str, int len, SIZE* extent) const
         if (!m_impl->LoadGlyph(gi)) continue;
         /* GDI rounds each advance before accumulating; matching that keeps
          * per-character and whole-run measurements consistent, which the
-         * \fsp path in CText depends on. */
-        total += Round26_6(m_impl->face->glyph->advance.x);
+         * \fsp path in CText depends on. A glyph an '@' face turns on its
+         * side steps by its vertical advance. */
+        if (m_impl->vertical && TurnsInVerticalFont(cp))
+            total += Round26_6(m_impl->face->glyph->metrics.vertAdvance);
+        else
+            total += Round26_6(m_impl->face->glyph->advance.x);
     }
 
     extent->cx = total;
@@ -542,10 +740,24 @@ bool FontFace::AppendString(const wchar_t* str, int len, int dx, int dy, GlyphPa
             continue;
         }
 
+        FT_Pos advance = (FT_Pos)Round26_6(m_impl->face->glyph->advance.x) << 6;
+
+        b.sideways = false;
+        if (m_impl->vertical && TurnsInVerticalFont(cp)) {
+            advance = (FT_Pos)Round26_6(m_impl->face->glyph->metrics.vertAdvance) << 6;
+            auto form = m_impl->vertForms.find(gi);
+            if (form != m_impl->vertForms.end() && !m_impl->LoadGlyph(form->second))
+                m_impl->LoadGlyph(gi);
+            b.sideways = true;
+            b.vertOriginY = m_impl->vertOriginY;
+            b.vertBottom = m_impl->vertBottom;
+            b.cellTop = dy;
+        }
+
         FT_Outline_Decompose(&m_impl->face->glyph->outline, &kOutlineFuncs, &b);
         b.CloseContour();
 
-        b.penX += (FT_Pos)Round26_6(m_impl->face->glyph->advance.x) << 6;
+        b.penX += advance;
     }
 
     /* Where a rotated font's rules go was not probed; they stay horizontal at
@@ -767,8 +979,14 @@ std::shared_ptr<FontFace> FontEngine::OpenFont(const FontDesc& desc)
     std::shared_ptr<FontData> blob;
     bool fromMemory = false;
 
+    /* "@Face" is Face drawn vertically; the face itself is found by its
+     * plain name, installed or embedded. */
+    std::wstring family = desc.faceName;
+    const bool vertical = !family.empty() && family[0] == L'@';
+    if (vertical) family.erase(0, 1);
+
     /* Script-embedded fonts take priority over anything installed. */
-    auto mem = m_impl->memoryFonts.find(ToLower(desc.faceName));
+    auto mem = m_impl->memoryFonts.find(ToLower(family));
     if (mem != m_impl->memoryFonts.end()) {
         blob = mem->second.data;
         match.faceIndex = mem->second.faceIndex;
@@ -777,7 +995,7 @@ std::shared_ptr<FontFace> FontEngine::OpenFont(const FontDesc& desc)
          * already is; decided below, once the face is open. */
         fromMemory = true;
     } else {
-        if (!FontProvider::Get().Match(desc.faceName, desc.weight, desc.italic,
+        if (!FontProvider::Get().Match(family, desc.weight, desc.italic,
                                        desc.charSet, &match))
             return nullptr;
         blob = m_impl->LoadBlob(match.path, match.faceIndex);
@@ -820,6 +1038,14 @@ std::shared_ptr<FontFace> FontEngine::OpenFont(const FontDesc& desc)
             impl->rotSin = std::sin(rad);
         }
         }
+    }
+
+    /* Together with \frs, GDI's vertical and rotated layouts would have to
+     * be combined in a way nobody has probed; the rotated one wins. */
+    if (vertical && !impl->rotated) {
+        impl->vertical = true;
+        std::lock_guard<std::mutex> lg(Library::Get().lock);
+        impl->vertForms = ReadVertForms(impl->face);
     }
 
     impl->syntheticBold = match.syntheticBold;
@@ -889,6 +1115,12 @@ bool FontEngine::SetupSize(FontFaceImpl* impl, const FontDesc& desc, FontMetrics
 
     metrics->ascent  = Round26_6(FT_MulFix(winAscent, yScale));
     metrics->descent = Round26_6(FT_MulFix(winDescent, yScale));
+
+    if (impl->vertical) {
+        const int typoDescent = (os2 && os2->version != 0xFFFF) ? std::abs(os2->sTypoDescender)
+                                                               : -f->descender;
+        impl->vertBottom = FT_MulFix(winAscent + typoDescent, yScale);
+    }
 
     /* A rotated font reports its own TEXTMETRIC; see "GDI's layout of a
      * rotated font". At 180 degrees it keeps the unrotated one. */

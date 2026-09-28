@@ -36,8 +36,10 @@ VSFilter script comes out the wrong size under another renderer. The same
 goes for `\frs`: under a rotated `lfOrientation` GDI changes the font's
 metrics and spaces, pivots and measures the glyphs by rules it does not
 document, and the engine reproduces those (worked out by probing GDI; see
-`src/font/font_engine.cpp`). Font *lookup* is still native: DirectWrite,
-CoreText or fontconfig.
+`src/font/font_engine.cpp`). Vertical `@` faces are laid out as GDI lays
+them on a horizontal line too: CJK glyphs on their side, in their GSUB
+`vert` forms, placed by their vertical metrics. Font *lookup* is still
+native: DirectWrite, CoreText or fontconfig.
 
 **Embedded fonts work.** `[Fonts]` attachments are handed to FreeType instead
 of being installed into the OS with `AddFontMemResourceEx`, so they now work
@@ -58,9 +60,16 @@ the same everywhere.
 Known issues
 ------------
 
-* OpenType fonts used vertically (`@Source Han Sans`) render smaller than
-  expected. This is inherited from VSFilter's layout model and is not fixed by
-  the FreeType port.
+* A vertical `@` face that is OpenType-CFF (`@Source Han Sans`, `@Adobe Fan
+  Heiti Std`) renders in that face here, laid out vertically. Upstream's GDI
+  cannot open CFF faces vertically and silently substitutes a system font —
+  SimSun on a Chinese Windows — so those lines differ. Copying the substitute
+  would make output depend on the Windows locale. TrueType `@` faces (SimSun,
+  Microsoft YaHei, MS Gothic, …) match upstream.
+* `@MS Gothic` and `@Malgun Gothic` leave Greek and Cyrillic upright where
+  the port, following the Chinese faces, lays them on their side; and SimSun
+  and SimHei space a `\frs` run of kana differently from the other faces.
+  Both come from GDI tables that could not be recovered.
 
 Licence
 -------
