@@ -358,11 +358,15 @@ bool RenderBdnXml(const std::string& subtitlePath,
      *     (REFERENCE_TIME)(10000000i64 * n / fps)        // fps is a float
      *
      * and by C++'s usual arithmetic conversions that division happens in
-     * single precision. An hour into a file the result is several
-     * milliseconds away from the exact time, which is enough to move a line's
-     * first or last frame. avs2bdnxml sees exactly these frames, so compute
-     * them the same way; volatile pins the intermediates to real floats on
-     * targets that would otherwise carry excess precision. */
+     * single precision. The error is small -- about 0.1 ms an hour in, 0.4 ms
+     * at worst over a feature -- but it decides boundary frames: at 24000/1001
+     * every 240th frame starts exactly on a centisecond, the resolution of ASS
+     * times, and at 293 of the first 399 such frames the float timestamp falls
+     * just short of it. RTS truncates to milliseconds, so a line starting on
+     * that centisecond appears one frame later than exact arithmetic says.
+     * avs2bdnxml sees exactly these frames, so compute them the same way;
+     * volatile pins the intermediates to real floats on targets that would
+     * otherwise carry excess precision. */
     const float renderFps = options.renderFps;
 
     /* What RTS itself is told the frame rate is. Upstream's AviSynth filters
