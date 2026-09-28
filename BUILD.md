@@ -146,13 +146,35 @@ meson test -C build csri-abi
 build/vsfmrender --size 1920x1080 --fps 23.976 input.ass output.xml
 ```
 
-Writes `output.xml` and `output_NNNN.png` beside it. Static lines produce one
-event each; animated lines (`\t`, `\move`, `\fad`, karaoke) are sampled per
-frame and identical consecutive frames are merged back into a single event.
-`--no-animation` samples animated lines once instead, which is much faster and
-freezes them.
+Writes `output.xml` and `output_NNNN.png` beside it.
+
+The event list follows what avs2bdnxml gets from upstream's `MaskSubMod`:
+frames are sampled at `(REFERENCE_TIME)(10000000 * n / fps)` computed in single
+precision, as upstream does; identical consecutive frames are merged and empty
+frames close an event; and pixels use `MaskSubMod`'s un-premultiply formula.
+Checked against avs2bdnxml-rs + upstream VSFilterMod with `bdn-diff`: every
+event of `tests/smoke.ass` has the same InTC and OutTC.
+
+`--fps` takes `num/den` or a decimal; 23.976, 29.97 and 59.94 mean their
+`/1001` rationals, which is what AviSynth gives `MaskSub` for a clip's
+`framerate`. Pass the exact rational if your script uses something else.
+`--fast` renders static lines once instead of on every frame; it produces the
+same events unless RTS misjudges a line as static.
+
+What `vsfmrender` does **not** do, that avs2bdnxml does: palette (8-bit PNG)
+output, splitting an event into two graphics, PGS `.sup` output, and
+even-Y enforcement. It writes one RGBA graphic per event.
 
 Run `vsfmrender --help` for the full option list.
+
+## Comparing against upstream
+
+`tests/csri_compare.c` renders a script through any CSRI plugin and dumps the
+raw surfaces; `tests/compare_raw.py` converts two such dumps with `MaskSubMod`'s
+formula and reports coverage IoU, alpha differences and a stacked visual diff.
+Point the first at Aegisub's `csri/VSFilterMod.dll` and the second at this
+build. Give upstream a script **with a UTF-8 BOM**: through CSRI it throws an
+unhandled C++ exception on a BOM-less file.
 
 ## What was removed
 
