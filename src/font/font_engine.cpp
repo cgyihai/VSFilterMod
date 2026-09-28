@@ -10,6 +10,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_OUTLINE_H
+#include FT_BBOX_H
 #include FT_SYNTHESIS_H
 #include FT_TRUETYPE_TABLES_H
 
@@ -45,11 +46,27 @@ struct PathBuilder
     bool contourOpen;
     FT_Vector cur;    // current point, kept in 26.6 font space
 
+    /* A rotated font's glyph turns about (pivotX - originX, 0) on screen, the
+     * point (halfWidth, ascent) of the glyph measured from its origin, y up.
+     * See "GDI's layout of a rotated font". */
+    bool rotate = false;
+    double pivotX = 0.0;
+    double halfWidth = 0.0;
+    double ascent = 0.0;
+    double cosA = 1.0, sinA = 0.0;
+
     void Emit(FT_Pos x, FT_Pos y, BYTE type)
     {
         POINT p;
-        p.x = originX + Round26_6(penX + x);
-        p.y = originY - Round26_6(y);
+        if (rotate) {
+            const double qx = x / 64.0 - halfWidth;
+            const double qy = y / 64.0 - ascent;
+            p.x = (int)std::lround(pivotX + qx * cosA - qy * sinA);
+            p.y = (int)std::lround(originY - (qx * sinA + qy * cosA));
+        } else {
+            p.x = originX + Round26_6(penX + x);
+            p.y = originY - Round26_6(y);
+        }
         out->points.push_back(p);
         out->types.push_back(type);
         cur.x = x;
@@ -180,10 +197,13 @@ public:
     bool underline = false;
     bool strikeOut = false;
 
-    /* Non-identity when orient is in play; rotates each glyph about its own
-     * origin without tilting the baseline, as GM_ADVANCED + lfOrientation did. */
-    bool hasRotation = false;
-    FT_Matrix rotation = { 0x10000, 0, 0, 0x10000 };
+    /* lfOrientation != 0 under GM_ADVANCED (\frs): GDI rotates every glyph
+     * but keeps the run horizontal, spacing and placing the glyphs by rules
+     * of its own -- see "GDI's layout of a rotated font" below. rotCos and
+     * rotSin are of the counter-clockwise orientation angle. */
+    bool rotated = false;
+    double rotCos = 1.0;
+    double rotSin = 0.0;
 
     /* In GDI path units (= pixels at the requested cell height). */
     int underlinePos = 0;       // distance below the baseline to the top edge
@@ -250,10 +270,163 @@ public:
              * this a bold word lands em/110 to the right of upstream. */
             FT_Outline_Translate(&face->glyph->outline, -strength / 2, -strength / 2);
         }
-        if (hasRotation)     FT_Outline_Transform(&face->glyph->outline, &rotation);
         return true;
     }
 };
+
+// ---------------------------------------------------------------------------
+// GDI's layout of a rotated font (lfOrientation != lfEscapement, GM_ADVANCED)
+// ---------------------------------------------------------------------------
+//
+// Undocumented, and nothing like "rotate each glyph about its origin". Worked
+// out by probing GDI directly -- TextOutW into a path, per glyph, against the
+// unrotated outline -- on system fonts and on a synthetic font whose glyphs
+// are rectangles of chosen size and place (tests/ has none of that; the
+// numbers below are what those probes settled on):
+//
+//  * The rotated font reports its own TEXTMETRIC. Away from the axes its
+//    ascent and descent come from the head table's bounding box, on the axes
+//    (90 and 270 degrees) from usWinAscent/usWinDescent, and in both cases
+//    grow by unitsPerEm/64 and round up. At 0 and 180 degrees they are the
+//    unrotated values. RTS reads them (CMyFont::m_ascent), so they move the
+//    line as well as the glyphs.
+//
+//  * Each glyph turns about the top centre of its rotated cell: (w/2, ascent)
+//    from its origin, w being the advance. That point lands on the TA_TOP
+//    line, y = 0.
+//
+//  * The pen advance is two half-chords of ellipses through the baseline
+//    centre, one for the part of the glyph above the baseline and one for the
+//    part below:
+//
+//        r(A, B) = 1 / sqrt((cos a / A)^2 + (sin a / B)^2)
+//        up   = r(w/2, H/2 + max(0, ink top))
+//        down = r(w/2, H/2 - min(0, ink bottom))       H = ascent / 8
+//
+//    advance = up + down. Where the ink sits horizontally does not matter.
+//    The pivot sits at pen + whichever half faces left on screen: `up` while
+//    the glyph leans left (0 < a < 180), `down` otherwise.
+//
+//  * GetTextExtentPoint32 measures along the rotated axes: cx is the span of
+//    the glyphs' ink boxes along the rotated baseline, plus one (an empty
+//    glyph counts as a one-pixel box at its origin); cy is the cell height
+//    plus the pivots' spread along the rotated ascender. RTS feeds both into
+//    CText::m_width, so they decide where the line is centred.
+//
+//  * All of that spacing and measuring is dropped for a run that contains a
+//    CJK character (see RunKeepsAdvances): every glyph of such a run steps by
+//    its plain advance, and the extent is the plain one -- the advances
+//    summed, by the rotated cell height. Rotation and pivots are as above.
+//
+// Checked against GDI to within a device pixel -- an eighth of an output
+// pixel at the 8x size RTS renders at -- for Latin text in Arial, Times New
+// Roman and synthetic test fonts, and for CJK runs in SimSun and Microsoft
+// YaHei, at angles all round the circle. The metrics rule was also checked on
+// Segoe UI, Verdana, Courier New and Georgia.
+
+namespace {
+
+/* Whether GDI lays a run out with plain advances even though the font is
+ * rotated: it does as soon as the run holds one of these characters. They are
+ * near enough the characters that stand upright in vertical CJK text. GDI's
+ * own test could not be recovered -- it is not the font's code pages, GSUB
+ * 'vert' coverage, vmtx or embedded bitmaps -- so this is the set SimSun,
+ * SimHei, Microsoft YaHei, MS Gothic, Yu Gothic, Malgun Gothic and Arial were
+ * measured to agree on. Kana are in it, as for YaHei and the Japanese fonts;
+ * SimSun and SimHei alone leave a run of kana to the ellipse rule. */
+bool KeepsAdvanceWhenRotated(uint32_t cp)
+{
+    static const uint32_t kRanges[][2] = {
+        { 0x1100, 0x11FF },  // Hangul Jamo
+        { 0x2015, 0x2015 }, { 0x203B, 0x203B }, { 0x2121, 0x2121 },
+        { 0x2190, 0x2193 },  // arrows
+        { 0x221E, 0x221E }, { 0x2225, 0x2225 }, { 0x2227, 0x222A },
+        { 0x2234, 0x2235 }, { 0x2261, 0x2261 }, { 0x22A5, 0x22A5 },
+        { 0x2312, 0x2312 },
+        { 0x2460, 0x24FF },  // enclosed alphanumerics
+        /* The box-drawing characters GB2312 and JIS X 0208 carry. */
+        { 0x2500, 0x2503 }, { 0x250C, 0x250C }, { 0x250F, 0x2510 },
+        { 0x2513, 0x2514 }, { 0x2517, 0x2518 }, { 0x251B, 0x251D },
+        { 0x2520, 0x2520 }, { 0x2523, 0x2525 }, { 0x2528, 0x2528 },
+        { 0x252B, 0x252C }, { 0x252F, 0x2530 }, { 0x2533, 0x2534 },
+        { 0x2537, 0x2538 }, { 0x253B, 0x253C }, { 0x253F, 0x253F },
+        { 0x2542, 0x2542 }, { 0x254B, 0x254B },
+        { 0x25A0, 0x25A1 }, { 0x25B2, 0x25B3 }, { 0x25BC, 0x25BD },
+        { 0x25C6, 0x25C7 }, { 0x25CB, 0x25CB }, { 0x25CE, 0x25CF },
+        { 0x2605, 0x2606 }, { 0x2640, 0x2640 }, { 0x2642, 0x2642 },
+        { 0x2E80, 0x2FFF },  // CJK radicals, Kangxi, description characters
+        { 0x3001, 0x303F },  // CJK symbols and punctuation
+        { 0x3040, 0x30FF },  // kana
+        { 0x3130, 0x318F },  // Hangul compatibility jamo
+        { 0x3190, 0x31FF },  // kanbun, strokes, katakana extension
+        { 0x3200, 0x33FF },  // enclosed CJK, CJK compatibility
+        { 0x3400, 0x4DBF },  // CJK extension A
+        { 0x4E00, 0x9FFF },  // CJK unified ideographs
+        { 0xAC00, 0xD7AF },  // Hangul syllables
+        { 0xF900, 0xFAFF },  // CJK compatibility ideographs
+        { 0xFE10, 0xFE19 },  // vertical forms
+        { 0xFE30, 0xFE6F },  // CJK compatibility and small forms
+        { 0xFF01, 0xFF9F },  // fullwidth ASCII, halfwidth katakana
+        { 0xFFE0, 0xFFEE },
+        { 0x20000, 0x3FFFF }, // CJK extensions B and later
+    };
+    for (const auto& r : kRanges)
+        if (cp >= r[0] && cp <= r[1]) return true;
+    return false;
+}
+
+bool RunKeepsAdvances(const wchar_t* str, int len)
+{
+    int i = 0;
+    while (i < len)
+        if (KeepsAdvanceWhenRotated(NextCodePoint(str, len, i))) return true;
+    return false;
+}
+
+struct RotatedGlyph
+{
+    double width;     // w, the rounded advance
+    double up;        // half-chord above the baseline
+    double down;      // half-chord below
+    double inkLeft;   // black box along the baseline, from the origin
+    double inkRight;
+
+    /* From the pen to the pivot: the half that faces left on screen. */
+    double Left(double sinA) const { return sinA >= 0.0 ? up : down; }
+};
+
+/* `c` and `s` are |cos| and |sin| of the orientation. */
+RotatedGlyph MeasureRotated(const FT_GlyphSlot slot, double c, double s, double ascent)
+{
+    RotatedGlyph g;
+    g.width = (double)Round26_6(slot->advance.x);
+
+    double top = 0.0, bottom = 0.0;
+    if (slot->outline.n_points > 0) {
+        FT_BBox box;
+        FT_Outline_Get_BBox(&slot->outline, &box);
+        top = box.yMax / 64.0;
+        bottom = box.yMin / 64.0;
+        /* GDI's black box is whole pixels, rounded outwards. */
+        g.inkLeft = std::floor(box.xMin / 64.0);
+        g.inkRight = std::ceil(box.xMax / 64.0);
+    } else {
+        g.inkLeft = 0.0;
+        g.inkRight = 1.0;
+    }
+
+    const double half = g.width / 2.0;
+    const double h2 = ascent / 16.0;   // H/2, H = ascent / 8
+    auto radius = [&](double a, double b) {
+        if (a <= 0.0 || b <= 0.0) return 0.0;
+        return 1.0 / std::sqrt((c / a) * (c / a) + (s / b) * (s / b));
+    };
+    g.up = radius(half, h2 + (top > 0.0 ? top : 0.0));
+    g.down = radius(half, h2 - (bottom < 0.0 ? bottom : 0.0));
+    return g;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // FontFace
@@ -272,6 +445,42 @@ bool FontFace::TextExtent(const wchar_t* str, int len, SIZE* extent) const
     if (len < 0) len = (int)std::wcslen(str);
 
     std::lock_guard<std::mutex> g(Library::Get().lock);
+
+    if (m_impl->rotated && !RunKeepsAdvances(str, len)) {
+        const double c = m_impl->rotCos, s = m_impl->rotSin;
+        const double ac = std::fabs(c), as = std::fabs(s);
+        double pen = 0.0, firstPivot = 0.0, lastPivot = 0.0;
+        double lo = 0.0, hi = 0.0;
+        bool any = false;
+
+        int i = 0;
+        while (i < len) {
+            uint32_t cp = NextCodePoint(str, len, i);
+            FT_UInt gi = m_impl->GlyphIndex(cp);
+            if (!m_impl->LoadGlyph(gi)) continue;
+
+            const RotatedGlyph rg = MeasureRotated(m_impl->face->glyph, ac, as, m_metrics.ascent);
+            const double pivot = pen + rg.Left(s);
+            /* Along the rotated baseline, (cos a, -sin a) on screen, the
+             * pivot has moved pivot * cos a; the ink box sits around it. */
+            const double along = pivot * c - rg.width / 2.0;
+            const double a0 = along + rg.inkLeft, a1 = along + rg.inkRight;
+            if (!any) {
+                lo = a0; hi = a1; firstPivot = pivot; any = true;
+            } else {
+                if (a0 < lo) lo = a0;
+                if (a1 > hi) hi = a1;
+            }
+            lastPivot = pivot;
+            pen += rg.up + rg.down;
+        }
+
+        if (any) {
+            extent->cx = (int)std::floor(hi - lo) + 1;
+            extent->cy = (int)std::lround(m_metrics.height + (lastPivot - firstPivot) * as);
+        }
+        return true;
+    }
 
     int total = 0;
     int i = 0;
@@ -306,11 +515,32 @@ bool FontFace::AppendString(const wchar_t* str, int len, int dx, int dy, GlyphPa
 
     int runStart = (int)path.points.size();
 
+    double rotatedPen = 0.0;
+    const bool plainAdvances = m_impl->rotated && RunKeepsAdvances(str, len);
+    if (m_impl->rotated) {
+        b.rotate = true;
+        b.originY = dy;   // the pivots sit on the TA_TOP line
+        b.ascent = m_metrics.ascent;
+        b.cosA = m_impl->rotCos;
+        b.sinA = m_impl->rotSin;
+    }
+
     int i = 0;
     while (i < len) {
         uint32_t cp = NextCodePoint(str, len, i);
         FT_UInt gi = m_impl->GlyphIndex(cp);
         if (!m_impl->LoadGlyph(gi)) continue;
+
+        if (m_impl->rotated) {
+            const RotatedGlyph rg = MeasureRotated(m_impl->face->glyph, std::fabs(b.cosA),
+                                                   std::fabs(b.sinA), m_metrics.ascent);
+            b.halfWidth = rg.width / 2.0;
+            b.pivotX = dx + rotatedPen + rg.Left(b.sinA);
+            FT_Outline_Decompose(&m_impl->face->glyph->outline, &kOutlineFuncs, &b);
+            b.CloseContour();
+            rotatedPen += plainAdvances ? rg.width : rg.up + rg.down;
+            continue;
+        }
 
         FT_Outline_Decompose(&m_impl->face->glyph->outline, &kOutlineFuncs, &b);
         b.CloseContour();
@@ -318,7 +548,10 @@ bool FontFace::AppendString(const wchar_t* str, int len, int dx, int dy, GlyphPa
         b.penX += (FT_Pos)Round26_6(m_impl->face->glyph->advance.x) << 6;
     }
 
-    const int runWidth = Round26_6(b.penX);
+    /* Where a rotated font's rules go was not probed; they stay horizontal at
+     * the rotated font's baseline, as long as the run. */
+    if (m_impl->rotated) b.originY = dy + m_metrics.ascent;
+    const int runWidth = m_impl->rotated ? (int)std::lround(rotatedPen) : Round26_6(b.penX);
 
     /* GDI folds the underline and strike-out rules into the path itself. */
     if (m_impl->underline && runWidth > 0)
@@ -574,14 +807,19 @@ std::shared_ptr<FontFace> FontEngine::OpenFont(const FontDesc& desc)
     }
 
     if (desc.orientation % 3600 != 0) {
-        const double rad = (double)desc.orientation * 3.14159265358979323846 / 1800.0;
-        const FT_Fixed c = (FT_Fixed)(cos(rad) * 65536.0 + 0.5);
-        const FT_Fixed sn = (FT_Fixed)(sin(rad) * 65536.0 + 0.5);
-        /* FreeType is y-up, so a positive lfOrientation (counter-clockwise on
-         * screen) is a positive rotation here too. */
-        impl->rotation.xx = c;  impl->rotation.xy = -sn;
-        impl->rotation.yx = sn; impl->rotation.yy = c;
-        impl->hasRotation = true;
+        const int tenths = ((desc.orientation % 3600) + 3600) % 3600;
+        impl->rotated = true;
+        /* Exact on the axes, where the metrics rule changes too. */
+        switch (tenths) {
+        case 900:  impl->rotCos = 0.0;  impl->rotSin = 1.0;  break;
+        case 1800: impl->rotCos = -1.0; impl->rotSin = 0.0;  break;
+        case 2700: impl->rotCos = 0.0;  impl->rotSin = -1.0; break;
+        default: {
+            const double rad = tenths * 3.14159265358979323846 / 1800.0;
+            impl->rotCos = std::cos(rad);
+            impl->rotSin = std::sin(rad);
+        }
+        }
     }
 
     impl->syntheticBold = match.syntheticBold;
@@ -651,6 +889,20 @@ bool FontEngine::SetupSize(FontFaceImpl* impl, const FontDesc& desc, FontMetrics
 
     metrics->ascent  = Round26_6(FT_MulFix(winAscent, yScale));
     metrics->descent = Round26_6(FT_MulFix(winDescent, yScale));
+
+    /* A rotated font reports its own TEXTMETRIC; see "GDI's layout of a
+     * rotated font". At 180 degrees it keeps the unrotated one. */
+    if (impl->rotated && impl->rotSin != 0.0) {
+        int a = winAscent, d = winDescent;
+        if (impl->rotCos != 0.0) {
+            const TT_Header* head = (const TT_Header*)FT_Get_Sfnt_Table(f, FT_SFNT_HEAD);
+            a = head ? head->yMax : (int)f->bbox.yMax;
+            d = head ? -head->yMin : -(int)f->bbox.yMin;
+        }
+        const int pad = f->units_per_EM / 64;
+        metrics->ascent  = (int)((FT_MulFix(a + pad, yScale) + 63) >> 6);
+        metrics->descent = (int)((FT_MulFix(d + pad, yScale) + 63) >> 6);
+    }
     metrics->height  = metrics->ascent + metrics->descent;
     metrics->internalLeading = metrics->height - emPixels;
     if (metrics->internalLeading < 0) metrics->internalLeading = 0;

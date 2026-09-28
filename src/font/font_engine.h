@@ -57,10 +57,10 @@ struct FontDesc
     bool strikeOut = false;
 
     /* LOGFONT::lfOrientation, in tenths of a degree counter-clockwise. Drives
-     * VSFilterMod's \forient tag (patch m007), which on Windows worked by
-     * putting the HDC in GM_ADVANCED so GDI rotated each glyph in place while
-     * leaving the baseline horizontal. Reproduced here as a per-glyph outline
-     * transform. */
+     * VSFilterMod's \frs tag (patch m007), which on Windows put the HDC in
+     * GM_ADVANCED so GDI rotated each glyph while keeping the run horizontal.
+     * GDI also changes the font's metrics, spacing and extents when it does
+     * that; font_engine.cpp reproduces all of it. */
     int orientation = 0;
 
     bool operator==(const FontDesc& o) const

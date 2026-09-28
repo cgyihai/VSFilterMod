@@ -32,8 +32,12 @@ How this differs from upstream VSFilterMod
 three platforms render identically. The engine deliberately emulates GDI where
 the layout code depends on it — most importantly, a positive `LOGFONT` height
 is a character *cell* height, not an em size, which is the usual reason a
-VSFilter script comes out the wrong size under another renderer. Font *lookup*
-is still native: DirectWrite, CoreText or fontconfig.
+VSFilter script comes out the wrong size under another renderer. The same
+goes for `\frs`: under a rotated `lfOrientation` GDI changes the font's
+metrics and spaces, pivots and measures the glyphs by rules it does not
+document, and the engine reproduces those (worked out by probing GDI; see
+`src/font/font_engine.cpp`). Font *lookup* is still native: DirectWrite,
+CoreText or fontconfig.
 
 **Embedded fonts work.** `[Fonts]` attachments are handed to FreeType instead
 of being installed into the OS with `AddFontMemResourceEx`, so they now work
