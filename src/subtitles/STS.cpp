@@ -225,7 +225,7 @@ BYTE CharSetList[] =
     BALTIC_CHARSET
 };
 
-TCHAR* CharSetNames[] =
+const TCHAR* CharSetNames[] =
 {
     _T("ANSI"),
     _T("DEFAULT"),
@@ -618,11 +618,11 @@ static bool OpenSubViewer(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
                 i = j;
 
                 if(tag == L"font")
-                    font = def.fontName.CompareNoCase(WToT(param)) ? param : L"";
+                    font = def.fontName.CompareNoCase(WToT(param)) ? param : CStringW();
                 else if(tag == L"colf")
-                    color = def.colors[0] != wcstol(((LPCWSTR)param) + 2, 0, 16) ? param : L"";
+                    color = def.colors[0] != wcstol(((LPCWSTR)param) + 2, 0, 16) ? param : CStringW();
                 else if(tag == L"size")
-                    size = def.fontSize != wcstol(param, 0, 10) ? param : L"";
+                    size = def.fontSize != wcstol(param, 0, 10) ? param : CStringW();
                 else if(tag == L"style")
                 {
                     if(param.Find(L"no") >= 0)

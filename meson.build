@@ -213,8 +213,9 @@ if get_option('tests')
     #
     # Compile only: its objects use the POSIX manglings (DWORD is uint32_t
     # there, not unsigned long), so they cannot link against the rest of a
-    # Windows build. Compiling is the whole point.
-    if host_system == 'windows'
+    # Windows build. Compiling is the whole point. It needs the POSIX
+    # <strings.h>, which MinGW has and MSVC does not.
+    if host_system == 'windows' and cxx.has_header('strings.h')
         static_library('posix_headers_probe',
             files('tests/posix_headers_probe.cpp'),
             include_directories : inc,

@@ -1878,7 +1878,7 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                 {
                     CStringW s = param.Left(i).Trim();
                     if(!s.IsEmpty()) params.Add(s);
-                    param = i + 1 < param.GetLength() ? param.Mid(i + 1) : L"";
+                    param = i + 1 < param.GetLength() ? param.Mid(i + 1) : CStringW();
                 }
                 else
                 {
@@ -2024,7 +2024,7 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
 
         // TODO: call ParseStyleModifier(cmd, params, ..) and move the rest there
 
-        CStringW p = params.GetCount() > 0 ? params[0] : L"";
+        CStringW p = params.GetCount() > 0 ? params[0] : CStringW();
 
         if(cmd == "1c" || cmd == L"2c" || cmd == L"3c" || cmd == L"4c")
         {
