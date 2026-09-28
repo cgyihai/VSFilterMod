@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <algorithm>
 #include <map>
 #include <memory>
 
@@ -45,31 +46,40 @@ struct Surface
     void Clear() { std::fill(pixels.begin(), pixels.end(), kTransparent); }
 };
 
-/* Converts one native pixel to straight (non-premultiplied) RGBA. */
-inline void ToStraightRgba(DWORD src, BYTE out[4])
+/* Converts one native pixel to RGBA exactly as upstream's MaskSubMod does,
+ * so a PNG written here is byte-identical to one avs2bdnxml writes from the
+ * same rasterisation (it only swaps R and B before writing).
+ *
+ * This is CMemSubPic::AlphaBlt's MSP_RGBA branch, verbatim in effect:
+ *
+ *     bd = 0x100 - invA
+ *     B  = (B << 8) / bd;  V = ((G << 8) / bd) << 8;  R = ((R << 8) / bd) << 16
+ *     d  = B | V | R | (0xff000000 - (invA << 24))
+ *
+ * Note what it is not: it divides by A+1 rather than A, it truncates rather
+ * than rounds, and it does not clamp -- a channel that comes out at 256 bleeds
+ * into its neighbour through the OR. A "correct" un-premultiply differs by
+ * one on most semi-transparent edge pixels, so fidelity wins over tidiness.
+ * Pixels with invA == 0xff are never written upstream, which leaves the
+ * Blackness clip's 0x00000000 behind. */
+inline void ToMaskSubRgba(DWORD src, BYTE out[4])
 {
-    const unsigned a = 255u - ((src >> 24) & 0xff);
-
-    if (a == 0) {
+    const DWORD inv = src >> 24;
+    if (inv >= 0xff) {
         out[0] = out[1] = out[2] = out[3] = 0;
         return;
     }
 
-    const unsigned b = (src >> 0) & 0xff;
-    const unsigned g = (src >> 8) & 0xff;
-    const unsigned r = (src >> 16) & 0xff;
+    const DWORD bd = 0x100 - inv;
+    const DWORD B = ((src & 0x000000ff) << 8) / bd;
+    const DWORD V = ((src & 0x0000ff00) / bd) << 8;
+    const DWORD R = (((src & 0x00ff0000) >> 8) / bd) << 16;
+    const DWORD d = B | V | R | ((0xff000000 - (src & 0xff000000)) & 0xff000000);
 
-    /* Un-premultiply, clamping: rounding in the blend can push a channel a
-     * hair above the alpha it was multiplied by. */
-    auto un = [a](unsigned c) -> BYTE {
-        const unsigned v = (c * 255u + a / 2) / a;
-        return (BYTE)(v > 255u ? 255u : v);
-    };
-
-    out[0] = un(r);
-    out[1] = un(g);
-    out[2] = un(b);
-    out[3] = (BYTE)a;
+    out[0] = (BYTE)(d >> 16);   // R
+    out[1] = (BYTE)(d >> 8);    // G
+    out[2] = (BYTE)(d);         // B
+    out[3] = (BYTE)(d >> 24);   // A
 }
 
 /* FNV-1a over the visible pixels, used to collapse runs of identical frames
@@ -190,7 +200,7 @@ bool WritePng(const std::string& path, const Surface& s, const RECT& box, std::s
     for (int y = 0; y < h; ++y) {
         const DWORD* src = &s.pixels[(size_t)(box.top + y) * s.width + box.left];
         for (int x = 0; x < w; ++x)
-            ToStraightRgba(src[x], &row[(size_t)x * 4]);
+            ToMaskSubRgba(src[x], &row[(size_t)x * 4]);
         png_write_row(png, row.data());
     }
 
@@ -307,7 +317,7 @@ bool RenderBdnXml(const std::string& subtitlePath,
         if (error) *error = "invalid frame size";
         return false;
     }
-    if (options.fps <= 0.0) {
+    if (options.fps <= 0.0 || options.renderFps <= 0.0f) {
         if (error) *error = "invalid frame rate";
         return false;
     }
@@ -340,100 +350,115 @@ bool RenderBdnXml(const std::string& subtitlePath,
     const std::string stem = StemOf(xmlPath);
 
     std::vector<Event> events;
-
-    /* Walks the script one segment at a time. A segment whose content does not
-     * animate needs a single image; an animated one is sampled per frame and
-     * identical consecutive frames are merged back together, which keeps
-     * \t / \move / karaoke faithful without emitting a PNG per frame for
-     * static dialogue. */
     int imageIndex = 0;
     bool aborted = false;
 
-    const double frameDuration = 10000000.0 / options.fps;   // in 100ns units
+    /* MaskSubMod's clock, reproduced bit for bit. Upstream renders frame n at
+     *
+     *     (REFERENCE_TIME)(10000000i64 * n / fps)        // fps is a float
+     *
+     * and by C++'s usual arithmetic conversions that division happens in
+     * single precision. An hour into a file the result is several
+     * milliseconds away from the exact time, which is enough to move a line's
+     * first or last frame. avs2bdnxml sees exactly these frames, so compute
+     * them the same way; volatile pins the intermediates to real floats on
+     * targets that would otherwise carry excess precision. */
+    const float renderFps = options.renderFps;
+    auto frameTime = [renderFps](int n) -> REFERENCE_TIME {
+        volatile float num = (float)(10000000LL * (long long)n);
+        volatile float q = num / renderFps;
+        return (REFERENCE_TIME)q;
+    };
 
-    for (POSITION pos = rts.GetStartPosition(0, options.fps); pos && !aborted; ) {
-        const POSITION current = pos;
-        pos = rts.GetNext(pos);
+    /* Frame range: up to the first frame at or past the last segment's end. */
+    REFERENCE_TIME lastStop = 0;
+    for (POSITION pos = rts.GetStartPosition(0, renderFps); pos; pos = rts.GetNext(pos))
+        lastStop = std::max(lastStop, rts.GetStop(pos, renderFps));
 
-        const REFERENCE_TIME start = rts.GetStart(current, options.fps);
-        const REFERENCE_TIME stop = rts.GetStop(current, options.fps);
-        if (stop <= start) continue;
+    int endFrame = (int)((double)lastStop * renderFps / 10000000.0) + 2;
+    while (endFrame > 0 && frameTime(endFrame - 1) >= lastStop) --endFrame;
+    ++endFrame;
+    if (options.lastFrame >= 0 && endFrame > options.lastFrame + 1)
+        endFrame = options.lastFrame + 1;
 
-        int firstFrame = (int)std::ceil((double)start / frameDuration - 1e-9);
-        int lastFrame = (int)std::ceil((double)stop / frameDuration - 1e-9);
+    /* The open event, if any. Its PNG is written when it opens -- the image
+     * is known then -- and only its OutTC is filled in when it closes. */
+    bool runOpen = false;
+    int runSegment = -1;
+    uint64_t runHash = 0;
+    RECT runBox = {0, 0, 0, 0};
 
-        if (firstFrame < options.firstFrame) firstFrame = options.firstFrame;
-        if (options.lastFrame >= 0 && lastFrame > options.lastFrame + 1)
-            lastFrame = options.lastFrame + 1;
-        if (lastFrame <= firstFrame) continue;
+    auto closeRun = [&](int frame) {
+        if (!runOpen) return;
+        events.back().outFrame = frame;
+        runOpen = false;
+        runSegment = -1;
+    };
 
-        const bool animated = options.animated && rts.IsAnimated(current);
+    const RECT fullFrame = {0, 0, options.width, options.height};
 
-        uint64_t runHash = 0;
-        int runStart = -1;
-        RECT runBox = {0, 0, 0, 0};
+    for (int n = std::max(0, options.firstFrame); n < endFrame; ++n) {
+        if (progress && !progress->OnFrame(n, endFrame)) { aborted = true; break; }
 
-        auto flushRun = [&](int endFrame) -> bool {
-            if (runStart < 0) return true;
+        const REFERENCE_TIME rt = frameTime(n);
 
-            Event ev;
-            ev.inFrame = runStart;
-            ev.outFrame = endFrame;
-            ev.box = runBox;
-
-            char name[64];
-            std::snprintf(name, sizeof(name), "%s_%04d.png", stem.c_str(), imageIndex++);
-            ev.png = name;
-
-            /* Re-render the run's first frame: the surface currently holds a
-             * later one. */
-            surface.Clear();
-            RECT bbox = {0, 0, 0, 0};
-            rts.Render(spd, (REFERENCE_TIME)(runStart * frameDuration + frameDuration / 2),
-                       options.fps, bbox);
-
-            if (!WritePng(outDir + ev.png, surface, ev.box, error)) return false;
-
-            events.push_back(ev);
-            runStart = -1;
-            return true;
-        };
-
-        const int step = animated ? 1 : (lastFrame - firstFrame);
-
-        for (int f = firstFrame; f < lastFrame; f += step) {
-            if (progress && !progress->OnFrame(f, lastFrame)) { aborted = true; break; }
-
-            surface.Clear();
-            RECT bbox = {0, 0, 0, 0};
-
-            /* Sample at the middle of the frame's interval, which is what a
-             * player would display for it. */
-            const REFERENCE_TIME rt = (REFERENCE_TIME)(f * frameDuration + frameDuration / 2);
-            rts.Render(spd, rt, options.fps, bbox);
-
-            RECT box = bbox;
-            bool visible = ClampBox(&box, options.width, options.height);
-            if (visible && options.crop) visible = TightenToInk(surface, &box);
-
-            if (!visible) {
-                if (!flushRun(f)) return false;
-                continue;
-            }
-
-            const uint64_t hash = HashRegion(surface, box);
-
-            if (runStart >= 0 && hash == runHash) continue;   // same picture, extend
-
-            if (!flushRun(f)) return false;
-
-            runStart = f;
-            runHash = hash;
-            runBox = box;
+        /* Same lookup RTS::Render does internally, so a frame counts as
+         * carrying a subtitle exactly when upstream would draw one on it. */
+        int segment = -1;
+        const STSSegment* stss = rts.SearchSubs((int)(rt / 10000), renderFps, &segment);
+        if (!stss || stss->subs.GetCount() == 0) {
+            closeRun(n);
+            continue;
         }
 
-        if (!aborted && !flushRun(lastFrame)) return false;
+        /* In fast mode a segment RTS says does not animate is drawn once. */
+        if (options.fast && runOpen && segment == runSegment &&
+            !rts.IsAnimated((POSITION)(intptr_t)(segment + 1)))
+            continue;
+
+        surface.Clear();
+        RECT bbox = {0, 0, 0, 0};
+        rts.Render(spd, rt, renderFps, bbox);
+
+        RECT ink = bbox;
+        const bool visible = ClampBox(&ink, options.width, options.height) &&
+                             TightenToInk(surface, &ink);
+        if (!visible) {                       // avs2bdnxml's is_empty()
+            closeRun(n);
+            continue;
+        }
+
+        const RECT box = options.crop ? ink : fullFrame;
+        const uint64_t hash = HashRegion(surface, box);
+
+        if (runOpen && hash == runHash &&        // avs2bdnxml's is_identical()
+            box.left == runBox.left && box.top == runBox.top &&
+            box.right == runBox.right && box.bottom == runBox.bottom) {
+            runSegment = segment;
+            continue;
+        }
+
+        closeRun(n);
+
+        Event ev;
+        ev.inFrame = n;
+        ev.outFrame = n + 1;
+        ev.box = box;
+
+        char name[64];
+        std::snprintf(name, sizeof(name), "%s_%04d.png", stem.c_str(), imageIndex++);
+        ev.png = name;
+
+        if (!WritePng(outDir + ev.png, surface, ev.box, error)) return false;
+
+        events.push_back(ev);
+        runOpen = true;
+        runSegment = segment;
+        runHash = hash;
+        runBox = box;
     }
+
+    if (!aborted) closeRun(endFrame);
 
     if (aborted) {
         if (error) *error = "cancelled";

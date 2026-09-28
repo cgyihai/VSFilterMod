@@ -16,3 +16,4 @@ thirdparty/
 subprojects/*.wrap.redirect
 subprojects/zlib.wrap
 subprojects/.wraplock
+__pycache__/

@@ -22,7 +22,16 @@ struct BdnOptions
 {
     int  width = 1920;
     int  height = 1080;
+
+    /* The nominal rate, used for the timecode grid and the FrameRate label
+     * (23.976 counts on a 24 frame grid, as avs2bdnxml does). */
     double fps = 23.976;
+
+    /* The rate the renderer is clocked at. Upstream's AviSynth filter takes
+     * this as (float)fps_numerator / fps_denominator of the clip, so for
+     * 23.976 material it is (float)24000/1001, not (float)23.976. Keep it in
+     * single precision: see frameTime() in the writer. */
+    float renderFps = 24000.0f / 1001.0f;
 
     /* Frame range to export; end < 0 means "to the last subtitle". */
     int  firstFrame = 0;
@@ -31,13 +40,14 @@ struct BdnOptions
     std::string languageCode = "und";   // ISO 639-2
     std::string title;                  // defaults to the output file's stem
 
-    /* Emit one PNG per frame for animated lines. With this off, an animated
-     * line is sampled once at its midpoint, which is much faster but freezes
-     * \t, \move and karaoke. */
-    bool animated = true;
+    /* By default every frame that falls inside a subtitle segment is
+     * rendered and compared with the previous one, exactly as avs2bdnxml
+     * does through AviSynth, so the event list matches it frame for frame.
+     * fast trusts RTS's IsAnimated() and renders a static segment once. */
+    bool fast = false;
 
-    /* Crop each image to its ink bounding box. Blu-ray decoders prefer small
-     * windows, and it is what every other BDN exporter does. */
+    /* Crop each image to its ink bounding box (avs2bdnxml -a1). Off writes
+     * the full frame for every event, like avs2bdnxml -a0. */
     bool crop = true;
 };
 
