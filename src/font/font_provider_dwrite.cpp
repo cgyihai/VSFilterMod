@@ -75,8 +75,10 @@ public:
         HRESULT hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
                                          __uuidof(IDWriteFactory),
                                          reinterpret_cast<IUnknown**>(&m_factory));
-        if (SUCCEEDED(hr) && m_factory)
+        if (SUCCEEDED(hr) && m_factory) {
             m_factory->GetSystemFontCollection(&m_collection, FALSE);
+            m_factory->GetGdiInterop(&m_gdiInterop);
+        }
     }
 
     bool Match(const std::wstring& family, int weight, bool italic,
@@ -86,11 +88,27 @@ public:
 
         std::lock_guard<std::mutex> g(m_lock);
 
+        /* A leading '@' asks GDI for the vertical variant of a CJK face. The
+         * vertical glyph layout is not reproduced yet, but the face itself
+         * must still be found: matching "@Microsoft YaHei" literally fails,
+         * falls back to Arial, and every CJK character renders as a box. */
+        std::wstring name = family;
+        if (!name.empty() && name[0] == L'@') name.erase(0, 1);
+
+        /* First choice: GDI's own matching rules, via DirectWrite's GDI
+         * interop. FindFamilyName only knows DirectWrite's weight/stretch/
+         * style families, so a GDI family name like "Segoe UI Semibold" or
+         * "Arial Black" -- which DirectWrite files under "Segoe UI" and "Arial"
+         * -- is not found and silently falls back to Arial. Scripts name fonts
+         * the way GDI does, so match the way GDI does. */
+        if (!name.empty() && m_gdiInterop && MatchLikeGdi(name, weight, italic, charSet, out))
+            return true;
+
         UINT32 index = 0;
         BOOL exists = FALSE;
 
-        if (!family.empty())
-            m_collection->FindFamilyName(family.c_str(), &index, &exists);
+        if (!name.empty())
+            m_collection->FindFamilyName(name.c_str(), &index, &exists);
 
         bool exact = (exists != FALSE);
         if (!exact) {
@@ -131,6 +149,38 @@ public:
     }
 
 private:
+    bool MatchLikeGdi(const std::wstring& name, int weight, bool italic,
+                      int charSet, FontMatch* out)
+    {
+        LOGFONTW lf;
+        std::memset(&lf, 0, sizeof(lf));
+        lf.lfHeight = -100;                 // size is irrelevant to matching
+        lf.lfWeight = weight;
+        lf.lfItalic = italic ? TRUE : FALSE;
+        lf.lfCharSet = (BYTE)charSet;
+        lf.lfOutPrecision = OUT_TT_PRECIS;
+        lf.lfQuality = ANTIALIASED_QUALITY;
+        wcsncpy(lf.lfFaceName, name.c_str(), LF_FACESIZE - 1);
+
+        ComPtr<IDWriteFont> font;
+        if (FAILED(m_gdiInterop->CreateFontFromLOGFONT(&lf, &font)) || !font)
+            return false;               // not installed: caller falls back
+
+        ComPtr<IDWriteFontFace> fontFace;
+        if (FAILED(font->CreateFontFace(&fontFace)) || !fontFace) return false;
+        if (!ResolveFile(fontFace.get(), out)) return false;
+
+        out->faceIndex = (int)fontFace->GetIndex();
+        out->exactFamily = true;
+
+        /* GetSimulations reports exactly what GDI would fake for this LOGFONT,
+         * which is a better answer than comparing weights ourselves. */
+        const DWRITE_FONT_SIMULATIONS sim = font->GetSimulations();
+        out->syntheticBold = (sim & DWRITE_FONT_SIMULATIONS_BOLD) != 0;
+        out->syntheticItalic = (sim & DWRITE_FONT_SIMULATIONS_OBLIQUE) != 0;
+        return true;
+    }
+
     static bool ResolveFile(IDWriteFontFace* face, FontMatch* out)
     {
         UINT32 fileCount = 0;
@@ -173,6 +223,7 @@ private:
 
     ComPtr<IDWriteFactory> m_factory;
     ComPtr<IDWriteFontCollection> m_collection;
+    ComPtr<IDWriteGdiInterop> m_gdiInterop;
     std::mutex m_lock;
 };
 

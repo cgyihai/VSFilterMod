@@ -3882,12 +3882,12 @@ CPoint MOD_JITTER::getOffset(REFERENCE_TIME rt)
     if(period == 0) period = 1;
     int rseed = (seed + rt / period) * 100;
 
-    srand(rseed);
+    vsfm_srand(rseed);
     int xamp = (offset.left + offset.right);
-    int xoffset = (xamp != 0) ? ((rand() % xamp) - offset.left) : 0;
+    int xoffset = (xamp != 0) ? ((vsfm_rand() % xamp) - offset.left) : 0;
 
     int yamp = (offset.bottom + offset.top);
-    int yoffset = (yamp != 0) ? ((rand() % yamp) - offset.top) : 0;
+    int yoffset = (yamp != 0) ? ((vsfm_rand() % yamp) - offset.top) : 0;
 
     return CPoint((int)xoffset, (int)yoffset);
 }

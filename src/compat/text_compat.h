@@ -85,3 +85,22 @@ T Implode(CAtlList<T>& sl, SEP sep)
     }
     return ret;
 }
+
+// ---------------------------------------------------------------------------
+// Deterministic rand()
+//
+// \rnd, \rndx/y/z/s and \jitter seed the C library's generator with srand()
+// and draw from rand(). On Windows that is the Microsoft CRT's linear
+// congruential generator -- in both msvcrt and the UCRT -- so upstream
+// VSFilterMod output depends on exactly that sequence. glibc and the macOS
+// libc use entirely different algorithms (and a different RAND_MAX), so the
+// same script would jitter to different positions on every platform.
+//
+// These reproduce the Microsoft generator bit for bit, with per-thread state
+// as the CRT has, so a seeded effect lands on the same pixels everywhere.
+// ---------------------------------------------------------------------------
+
+void vsfm_srand(unsigned int seed);
+int  vsfm_rand();
+
+#define VSFM_RAND_MAX 0x7FFF

@@ -259,3 +259,20 @@ CStringW HostExecutablePath()
     }
 #endif
 }
+
+// ---------------------------------------------------------------------------
+
+namespace {
+thread_local unsigned int g_randState = 1;   // the CRT's initial seed
+}
+
+void vsfm_srand(unsigned int seed)
+{
+    g_randState = seed;
+}
+
+int vsfm_rand()
+{
+    g_randState = g_randState * 214013u + 2531011u;
+    return (int)((g_randState >> 16) & VSFM_RAND_MAX);
+}

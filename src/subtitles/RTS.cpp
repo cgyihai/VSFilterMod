@@ -175,7 +175,7 @@ void CWord::Transform(CPoint org)
     double yrnd = m_style.mod_rand.Y * 100;
     double zrnd = m_style.mod_rand.Z * 100;
 
-    srand(m_style.mod_rand.Seed);
+    vsfm_srand(m_style.mod_rand.Seed);
     // CPUID from VDub
     bool fSSE2 = !!(g_cpuid.m_flags & CCpuID::sse2);
 
@@ -321,9 +321,9 @@ void CWord::Transform(CPoint org)
                 alignas(16) float rx[4], ry[4], rz[4];
                 for(int k=0;k<4;k++)
                 {
-                    rx[k] = xrnd > 0 ? (xrnd - rand() % (int)(xrnd * 2 + 1)) : 0;
-                    ry[k] = yrnd > 0 ? (yrnd - rand() % (int)(yrnd * 2 + 1)) : 0;
-                    rz[k] = zrnd > 0 ? (zrnd - rand() % (int)(zrnd * 2 + 1)) : 0;
+                    rx[k] = xrnd > 0 ? (xrnd - vsfm_rand() % (int)(xrnd * 2 + 1)) : 0;
+                    ry[k] = yrnd > 0 ? (yrnd - vsfm_rand() % (int)(yrnd * 2 + 1)) : 0;
+                    rz[k] = zrnd > 0 ? (zrnd - vsfm_rand() % (int)(zrnd * 2 + 1)) : 0;
                 }
                 __m128 __001 = _mm_set_ps1(0.01f);
 
@@ -485,9 +485,9 @@ void CWord::Transform(CPoint org)
             }
 
             // patch m003. random text points
-            x = xrnd > 0 ? (xrnd - rand() % (int)(xrnd * 2 + 1)) / 100.0 + x : x;
-            y = yrnd > 0 ? (yrnd - rand() % (int)(yrnd * 2 + 1)) / 100.0 + y : y;
-            z = zrnd > 0 ? (zrnd - rand() % (int)(zrnd * 2 + 1)) / 100.0 + z : z;
+            x = xrnd > 0 ? (xrnd - vsfm_rand() % (int)(xrnd * 2 + 1)) / 100.0 + x : x;
+            y = yrnd > 0 ? (yrnd - vsfm_rand() % (int)(yrnd * 2 + 1)) / 100.0 + y : y;
+            z = zrnd > 0 ? (zrnd - vsfm_rand() % (int)(zrnd * 2 + 1)) / 100.0 + z : z;
 #else
             z = 0;
 #endif

@@ -223,8 +223,33 @@ public:
         if (FT_Load_Glyph(face, gi, flags) != 0) return false;
         if (face->glyph->format != FT_GLYPH_FORMAT_OUTLINE) return false;
 
-        if (syntheticItalic) FT_GlyphSlot_Oblique(face->glyph);
-        if (syntheticBold)   FT_GlyphSlot_Embolden(face->glyph);
+        /* GDI's simulated italic is a shear of 0.3397 (about 18.8 degrees),
+         * measured against upstream VSFilterMod as constant across SimHei,
+         * SimSun and Microsoft YaHei at 120 and 300px. FT_GlyphSlot_Oblique
+         * uses tan(12 deg) = 0.2126, which leans visibly less. Sheared about
+         * the baseline, so the advance and the baseline point are unchanged. */
+        if (syntheticItalic) {
+            static const FT_Matrix kGdiOblique = { 0x10000, 22263, 0, 0x10000 };
+            FT_Outline_Transform(&face->glyph->outline, &kGdiOblique);
+        }
+
+        /* GDI's simulated bold, measured against upstream VSFilterMod on
+         * SimHei at 100/200/400px: strokes grow by em/55 in both x and y,
+         * symmetrically about their centre, and the advance does not change.
+         * FT_GlyphSlot_Embolden is the wrong tool -- it uses em/24, more than
+         * twice as heavy, and widens the advance by the same amount, so every
+         * following glyph drifts right. FT_Outline_Embolden with the measured
+         * strength reproduces GDI; the advance is left alone. */
+        if (syntheticBold) {
+            const FT_Pos em = FT_MulFix(face->units_per_EM, face->size->metrics.y_scale);
+            const FT_Pos strength = em * 10 / 552;
+            FT_Outline_Embolden(&face->glyph->outline, strength);
+            /* FT_Outline_Embolden keeps the left and bottom edges fixed and
+             * grows right and up. GDI grows symmetrically -- the stroke centre
+             * does not move -- so shift back by half the strength. Without
+             * this a bold word lands em/110 to the right of upstream. */
+            FT_Outline_Translate(&face->glyph->outline, -strength / 2, -strength / 2);
+        }
         if (hasRotation)     FT_Outline_Transform(&face->glyph->outline, &rotation);
         return true;
     }
@@ -636,7 +661,12 @@ bool FontEngine::SetupSize(FontFaceImpl* impl, const FontDesc& desc, FontMetrics
     int uthick = f->underline_thickness;
     if (uthick <= 0) uthick = f->units_per_EM / 14;
 
-    impl->underlinePos = Round26_6(FT_MulFix(-upos, yScale));
+    /* FreeType reports underline_position as the *centre* of the stem: it has
+     * already subtracted half the thickness from the post table's value when
+     * loading the face. AppendRule wants the top edge, so step back up by half
+     * a thickness. Getting this wrong puts every underline exactly half a
+     * stroke too low compared to GDI -- measured at 2px on a 48px line. */
+    impl->underlinePos = Round26_6(FT_MulFix(-upos - uthick / 2, yScale));
     impl->underlineThickness = Round26_6(FT_MulFix(uthick, yScale));
     if (impl->underlineThickness < 1) impl->underlineThickness = 1;
 
