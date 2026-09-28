@@ -27,7 +27,6 @@ void Usage(const char* argv0)
         "  -t, --title TEXT     title recorded in the index\n"
         "      --first N        first frame to export\n"
         "      --last N         last frame to export\n"
-        "      --fast           draw static lines once instead of every frame\n"
         "      --no-crop        write full-frame images (avs2bdnxml -a0)\n"
         "  -q, --quiet          suppress progress output\n"
         "  -h, --help           this message\n",
@@ -140,7 +139,6 @@ int main(int argc, char** argv)
         else if (a == "-t" || a == "--title") opt.title = next("--title");
         else if (a == "--first") opt.firstFrame = std::atoi(next("--first"));
         else if (a == "--last") opt.lastFrame = std::atoi(next("--last"));
-        else if (a == "--fast") opt.fast = true;
         else if (a == "--no-crop") opt.crop = false;
         else if (!a.empty() && a[0] == '-' && a != "-") {
             std::fprintf(stderr, "vsfmrender: unknown option %s\n", a.c_str());

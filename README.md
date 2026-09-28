@@ -19,11 +19,11 @@ Outputs
 
 | Target | Purpose |
 | --- | --- |
-| `vsfiltermod.dll` / `.so` / `.dylib` | CSRI plugin. Drop it where Aegisub looks and select **CSRI/vsfiltermod_textsub** in Preferences. |
+| `vsfiltermod.dll` / `.so` / `.dylib` | One library, two faces: a **CSRI** plugin for Aegisub (select **CSRI/vsfiltermod_textsub**), and an **AviSynth+** plugin providing `TextSubMod` / `MaskSubMod`, so `LoadPlugin` scripts and avs2bdnxml work as with upstream. |
 | `vsfmrender` | `vsfmrender --size 1920x1080 --fps 23.976 in.ass out.xml` |
 
-Both come from the same sources, so BDN+XML output matches Aegisub's preview
-pixel for pixel.
+All of them run the same renderer, and `vsfmrender`'s BDN+XML output is
+byte-identical to what avs2bdnxml produces from this plugin's `MaskSubMod`.
 
 How this differs from upstream VSFilterMod
 ------------------------------------------
@@ -40,10 +40,11 @@ of being installed into the OS with `AddFontMemResourceEx`, so they now work
 through CSRI — where they never did before — and on every platform.
 
 **DirectShow is gone.** The filter, its property pages, the systray applet,
-the VobSub/DVB/HDMV/CC/USF/SSF/RealText parsers, the DirectX subpicture
-backends and the AviSynth/VapourSynth entry points were all removed. None of
-them are reachable from Aegisub or from BDN+XML output. If you want VSFilterMod
-as a DirectShow filter or a VapourSynth plugin, use upstream.
+the VobSub/DVB/HDMV/CC/USF/SSF/RealText parsers and the DirectX subpicture
+backends were removed; none of them are reachable from Aegisub, AviSynth or
+BDN+XML output. The AviSynth entry points were rewritten against AviSynth+'s
+C interface, so they work on every platform AviSynth+ runs on. `VobSub()` and
+the VapourSynth plugin are not carried over; for those, use upstream.
 
 **Rendering no longer depends on the machine.** Screen DPI is pinned at 96
 rather than read from a live device context, and charset-to-codepage mapping

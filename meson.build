@@ -157,10 +157,27 @@ inc = include_directories('src', 'src/vsfilter', 'include')
 # whatever files it finds.
 # ---------------------------------------------------------------------------
 
+# The AviSynth+ entry points (TextSubMod / MaskSubMod) live in the same
+# library, as they did upstream, so one file serves both Aegisub (CSRI) and
+# AviSynth scripts such as avs2bdnxml's. AviSynth is not linked: its C API is
+# resolved at plugin init from the module that loaded us.
+plugin_src = files('src/vsfilter/csriapi.cpp')
+plugin_deps = []
+if get_option('avisynth')
+    plugin_src += files(
+        'src/vsfilter/avisynth_plugin.cpp',
+        'src/vsfilter/vfr.cpp',
+        'src/subpic/mem_subpic.cpp',
+    )
+    if host_system != 'windows'
+        plugin_deps += cxx.find_library('dl', required : false)
+    endif
+endif
+
 csri_lib = shared_library('vsfiltermod',
-    vsfm_src + files('src/vsfilter/csriapi.cpp'),
+    vsfm_src + plugin_src,
     include_directories : [inc] + sse2neon_inc,
-    dependencies : deps,
+    dependencies : deps + plugin_deps,
     name_prefix : '',
     gnu_symbol_visibility : 'hidden',
     install : true,
@@ -210,5 +227,6 @@ summary({
     'font backend'   : font_backend,
     'target'         : host_system + '/' + host_cpu,
     'BDN+XML writer' : get_option('bdnxml'),
+    'AviSynth+ entry': get_option('avisynth'),
     'tests'          : get_option('tests'),
 }, section : 'VSFilterMod')

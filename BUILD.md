@@ -167,6 +167,36 @@ even-Y enforcement. It writes one RGBA graphic per event.
 
 Run `vsfmrender --help` for the full option list.
 
+## AviSynth+
+
+The same library is an AviSynth+ C plugin:
+
+```
+LoadPlugin("vsfiltermod.dll")
+MaskSubMod("subs.ass", width=1920, height=1080, fps=24000.0/1001.0, length=34000)
+# or, over video:
+TextSubMod(clip, "subs.ass", charset=1, fps=-1, vfr="timecodes.txt")
+```
+
+`TextSub`, `MaskSub` and `TextSubModSwapUV` are registered too, with upstream's
+signatures. Clips may be RGB32, RGB24, YUY2, YV12 or I420; YUV output uses
+the matrix from the script's `YCbCr Matrix` header, as upstream did.
+
+The render path mirrors upstream's `CFilter::Render` step for step -- the
+single-precision timestamp, the in-memory subpicture cleared over its last
+dirty rectangle, compositing only the rendered bounding box, flipping RGB32
+and RGB24 but not `MaskSubMod`'s RGBA -- because that is what decides the
+pixels avs2bdnxml receives. Checked against upstream through avs2bdnxml-rs
+and `tests/avs_dump.c`: identical event timing, identical subtitle rows for
+MaskSubMod's RGBA and for TextSubMod on RGB32, RGB24, YUY2 and YV12 (I420
+shares the YV12 code path but was not run separately), identical VFR frame
+selection.
+
+AviSynth is not a link-time dependency. The plugin resolves the C API from
+the AviSynth module that loaded it, so the same file still loads as a CSRI
+plugin on a machine with no AviSynth. Build with `-Davisynth=false` to leave
+the entry points out.
+
 ## Comparing against upstream
 
 `tests/csri_compare.c` renders a script through any CSRI plugin and dumps the
@@ -181,8 +211,8 @@ unhandled C++ exception on a BOM-less file.
 This tree is a cut-down VSFilterMod. Everything specific to DirectShow
 playback is gone, because neither Aegisub nor the BDN+XML writer uses it:
 the DirectShow filter and its property pages, the VobSub/DVB/HDMV/CC/USF/SSF
-and RealText parsers, the DirectX subpicture backends, and the
-AviSynth/VapourSynth entry points.
+and RealText parsers, the DirectX subpicture backends, `VobSub()`, and the
+VapourSynth plugin.
 
 What is kept is the part that matters: the full VSFilterMod tag set, including
 the mod extensions (`\pngimg` picture backgrounds, gradients, moveable vector

@@ -40,12 +40,6 @@ struct BdnOptions
     std::string languageCode = "und";   // ISO 639-2
     std::string title;                  // defaults to the output file's stem
 
-    /* By default every frame that falls inside a subtitle segment is
-     * rendered and compared with the previous one, exactly as avs2bdnxml
-     * does through AviSynth, so the event list matches it frame for frame.
-     * fast trusts RTS's IsAnimated() and renders a static segment once. */
-    bool fast = false;
-
     /* Crop each image to its ink bounding box (avs2bdnxml -a1). Off writes
      * the full frame for every event, like avs2bdnxml -a0. */
     bool crop = true;

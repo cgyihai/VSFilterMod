@@ -364,6 +364,12 @@ bool RenderBdnXml(const std::string& subtitlePath,
      * them the same way; volatile pins the intermediates to real floats on
      * targets that would otherwise carry excess precision. */
     const float renderFps = options.renderFps;
+
+    /* What RTS itself is told the frame rate is. Upstream's AviSynth filters
+     * never set their subpicture queue's rate, so RTS always saw its default,
+     * 25.0; the clip's rate only ever reached the timestamp above. It matters
+     * only for frame-timed formats such as MicroDVD. */
+    const double kQueueFps = 25.0;
     auto frameTime = [renderFps](int n) -> REFERENCE_TIME {
         volatile float num = (float)(10000000LL * (long long)n);
         volatile float q = num / renderFps;
@@ -372,8 +378,8 @@ bool RenderBdnXml(const std::string& subtitlePath,
 
     /* Frame range: up to the first frame at or past the last segment's end. */
     REFERENCE_TIME lastStop = 0;
-    for (POSITION pos = rts.GetStartPosition(0, renderFps); pos; pos = rts.GetNext(pos))
-        lastStop = std::max(lastStop, rts.GetStop(pos, renderFps));
+    for (POSITION pos = rts.GetStartPosition(0, kQueueFps); pos; pos = rts.GetNext(pos))
+        lastStop = std::max(lastStop, rts.GetStop(pos, kQueueFps));
 
     int endFrame = (int)((double)lastStop * renderFps / 10000000.0) + 2;
     while (endFrame > 0 && frameTime(endFrame - 1) >= lastStop) --endFrame;
@@ -405,20 +411,15 @@ bool RenderBdnXml(const std::string& subtitlePath,
         /* Same lookup RTS::Render does internally, so a frame counts as
          * carrying a subtitle exactly when upstream would draw one on it. */
         int segment = -1;
-        const STSSegment* stss = rts.SearchSubs((int)(rt / 10000), renderFps, &segment);
+        const STSSegment* stss = rts.SearchSubs((int)(rt / 10000), kQueueFps, &segment);
         if (!stss || stss->subs.GetCount() == 0) {
             closeRun(n);
             continue;
         }
 
-        /* In fast mode a segment RTS says does not animate is drawn once. */
-        if (options.fast && runOpen && segment == runSegment &&
-            !rts.IsAnimated((POSITION)(intptr_t)(segment + 1)))
-            continue;
-
         surface.Clear();
         RECT bbox = {0, 0, 0, 0};
-        rts.Render(spd, rt, renderFps, bbox);
+        rts.Render(spd, rt, kQueueFps, bbox);
 
         RECT ink = bbox;
         const bool visible = ClampBox(&ink, options.width, options.height) &&
