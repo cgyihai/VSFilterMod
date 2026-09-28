@@ -15,6 +15,7 @@
  *  writes <outprefix>_<t>.raw  (width*height*4 bytes, BGRA, top-down)
  */
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,7 +35,7 @@
 enum { CSRI_F_BGR_ = 0x102 };
 
 struct csri_fmt { int pixfmt; unsigned width, height; };
-struct csri_frame { int pixfmt; unsigned char* planes[4]; long strides[4]; };
+struct csri_frame { int pixfmt; unsigned char* planes[4]; ptrdiff_t strides[4]; };
 
 int main(int argc, char** argv)
 {
@@ -88,7 +89,7 @@ int main(int argc, char** argv)
         memset(&fr, 0, sizeof(fr));
         fr.pixfmt = CSRI_F_BGR_;
         fr.planes[0] = (unsigned char*)buf;
-        fr.strides[0] = (long)W * 4;
+        fr.strides[0] = (ptrdiff_t)W * 4;
         render(inst, &fr, t);
 
         char name[1024];

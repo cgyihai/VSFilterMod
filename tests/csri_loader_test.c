@@ -11,6 +11,7 @@
  *          cc -o csri_loader_test.exe csri_loader_test.c      (Windows)
  */
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,7 +47,7 @@ enum csri_pixfmt {
 };
 
 struct csri_fmt { enum csri_pixfmt pixfmt; unsigned width, height; };
-struct csri_frame { enum csri_pixfmt pixfmt; unsigned char *planes[4]; long strides[4]; };
+struct csri_frame { enum csri_pixfmt pixfmt; unsigned char *planes[4]; ptrdiff_t strides[4]; };
 struct csri_info { const char *name, *version, *longname, *author, *copyright; };
 
 typedef void csri_rend;
@@ -142,7 +143,7 @@ int main(int argc, char** argv)
         memset(&frame, 0, sizeof(frame));
         frame.pixfmt = CSRI_F_BGR_;
         frame.planes[0] = buf;
-        frame.strides[0] = (long)W * 4;
+        frame.strides[0] = (ptrdiff_t)W * 4;
 
         render(inst, &frame, 1.0);
 
