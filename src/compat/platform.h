@@ -47,6 +47,9 @@ typedef int32_t             LONG;
 typedef int64_t             LONGLONG;
 typedef uint64_t            ULONGLONG;
 typedef int64_t             __int64;
+#define _I64_MAX            INT64_MAX
+#define _I64_MIN            INT64_MIN
+#define _UI64_MAX           UINT64_MAX
 typedef int                 BOOL;
 typedef unsigned char       UCHAR;
 typedef char                CHAR;
@@ -98,6 +101,7 @@ typedef struct tagRECT  { LONG left, top, right, bottom; } RECT, *LPRECT;
 #define MAC_CHARSET          77
 #define SHIFTJIS_CHARSET     128
 #define HANGUL_CHARSET       129
+#define HANGEUL_CHARSET      129   /* the older spelling wingdi.h keeps */
 #define JOHAB_CHARSET        130
 #define GB2312_CHARSET       134
 #define CHINESEBIG5_CHARSET  136

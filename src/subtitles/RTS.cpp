@@ -153,7 +153,9 @@ void CWord::Paint(CPoint p, CPoint org)
 }
 
 #ifdef _VSMOD
-#include <emmintrin.h>
+/* SSE on x86, sse2neon on AArch64 when available; otherwise Transform takes
+ * its C path. */
+#include "../compat/simd_compat.h"
 #endif
 
 void CWord::Transform(CPoint org)
@@ -181,6 +183,7 @@ void CWord::Transform(CPoint org)
 
     // SSE code
     // speed up ~1.5-1.7x
+#if VSFM_HAVE_SSE2
     if(fSSE2)
     {
         __m128 __xshift = _mm_set_ps1(m_style.fontShiftX);
@@ -433,6 +436,7 @@ void CWord::Transform(CPoint org)
         }
     }
     else
+#endif
     // C-code
     {
         // patch m008. distort

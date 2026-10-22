@@ -205,6 +205,24 @@ int WideCharToMultiByte(UINT codePage, DWORD /*flags*/, const wchar_t* wide, int
 
 #endif // !_WIN32
 
+#if !defined(_WIN32)
+BOOL IsDBCSLeadByteEx(UINT codePage, BYTE b)
+{
+    switch (codePage) {
+    case 932:   // Shift-JIS
+        return (b >= 0x81 && b <= 0x9F) || (b >= 0xE0 && b <= 0xFC);
+    case 936:   // GBK
+    case 949:   // Unified Hangul
+    case 950:   // Big5
+        return b >= 0x81 && b <= 0xFE;
+    case 1361:  // Johab
+        return (b >= 0x84 && b <= 0xD3) || (b >= 0xD8 && b <= 0xDE) || (b >= 0xE0 && b <= 0xF9);
+    default:
+        return FALSE;
+    }
+}
+#endif
+
 CStringW UTF8To16(LPCSTR utf8)
 {
     if (!utf8) return CStringW();

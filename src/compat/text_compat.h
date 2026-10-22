@@ -25,6 +25,11 @@ int MultiByteToWideChar(UINT codePage, DWORD flags, const char* mb, int cbMultiB
                         wchar_t* wide, int cchWideChar);
 int WideCharToMultiByte(UINT codePage, DWORD flags, const wchar_t* wide, int cchWideChar,
                         char* mb, int cbMultiByte, const char* defaultChar, BOOL* usedDefault);
+
+/* Whether `b` starts a two-byte character in `codePage`. The lead-byte
+ * ranges of the four double-byte Windows code pages and Johab; every other
+ * code page is single-byte. */
+BOOL IsDBCSLeadByteEx(UINT codePage, BYTE b);
 #endif
 
 CStringW UTF8To16(LPCSTR utf8);

@@ -21,6 +21,7 @@
 
 #include "../compat/vsfm_compat.h"
 #include "../compat/cpu_compat.h"
+#include "../compat/simd_compat.h"
 #include <string.h>
 #include <math.h>
 #include <vector>
@@ -536,8 +537,8 @@ void Rasterizer::_OverlapRegion(tSpanBuffer& dst, tSpanBuffer& src, int dx, int 
 
     // Don't worry -- even if dy<0 this will still work! // G: hehe, the evil twin :)
 
-    unsigned __int64 offset1 = (((__int64)dy) << 32) - dx;
-    unsigned __int64 offset2 = (((__int64)dy) << 32) + dx;
+    uint64_t offset1 = (((__int64)dy) << 32) - dx;
+    uint64_t offset2 = (((__int64)dy) << 32) + dx;
 
     while(itA != itAE && itB != itBE)
     {
@@ -545,8 +546,8 @@ void Rasterizer::_OverlapRegion(tSpanBuffer& dst, tSpanBuffer& src, int dx, int 
         {
             // B span is earlier.  Use it.
 
-            unsigned __int64 x1 = (*itB).first + offset1;
-            unsigned __int64 x2 = (*itB).second + offset2;
+            uint64_t x1 = (*itB).first + offset1;
+            uint64_t x2 = (*itB).second + offset2;
 
             ++itB;
 
@@ -589,8 +590,8 @@ void Rasterizer::_OverlapRegion(tSpanBuffer& dst, tSpanBuffer& src, int dx, int 
         {
             // A span is earlier.  Use it.
 
-            unsigned __int64 x1 = (*itA).first;
-            unsigned __int64 x2 = (*itA).second;
+            uint64_t x1 = (*itA).first;
+            uint64_t x2 = (*itA).second;
 
             ++itA;
 
