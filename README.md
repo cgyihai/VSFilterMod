@@ -88,10 +88,6 @@ Known issues
 * A face name GDI does not know, such as `@Arial`, makes GDI substitute
   SimSun for the whole line, Latin included; here the Latin stays in the
   style face.
-* A `\frs` line that is also synthetic bold and needs glyph fallback (bold
-  CJK in Arial, turned) comes out a little lighter than upstream's (IoU
-  about 0.96–0.97); each of the three alone matches.
-
 Licence
 -------
 

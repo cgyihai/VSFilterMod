@@ -15,3 +15,5 @@ Dialogue: 0,0:00:02.00,0:00:03.00,Default,,0,0,0,,{\fnKaiTi\b1\fs100}楷体粗�
 Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,{\fnSimHei\b1\i1}粗斜体组合
 Dialogue: 0,0:00:04.00,0:00:05.00,Default,,0,0,0,,{\fnSimHei\b1\frs30}粗体旋转
 Dialogue: 0,0:00:05.00,0:00:06.00,Default,,0,0,0,,{\fnArial\b1}Arial bold real face
+Dialogue: 0,0:00:06.00,0:00:07.00,Default,,0,0,0,,{\fnArial\b1\frs30}粗体回退旋转 AB
+Dialogue: 0,0:00:07.00,0:00:08.00,Default,,0,0,0,,{\fnArial\b1\frs45}旋转粗体

@@ -355,6 +355,12 @@ public:
     FT_Pos vertBottom = 0;      // 26.6: usWinAscent + |sTypoDescender|
     mutable FT_Pos vertOriginY = 0;   // 26.6, of the glyph LoadGlyph last loaded
 
+    /* Whether LoadGlyph last emboldened its glyph, and that glyph's exact
+     * bounding box before it did (26.6). A rotated run measures a simulated
+     * bold glyph from these; see "GDI's layout of a rotated font". */
+    mutable bool lastEmboldened = false;
+    mutable FT_BBox lastPlainBox = { 0, 0, 0, 0 };
+
     /* In GDI path units (= pixels at the requested cell height). */
     int underlinePos = 0;       // distance below the baseline to the top edge
     int underlineThickness = 1;
@@ -403,6 +409,9 @@ public:
         /* See "GDI's simulated bold" above. FT_GlyphSlot_Embolden is the
          * wrong tool: em/24, not shrunk first, and the advance grows by the
          * same amount. */
+        lastEmboldened = syntheticBold && face->glyph->outline.n_points > 0;
+        if (lastEmboldened)
+            FT_Outline_Get_BBox(&face->glyph->outline, &lastPlainBox);
         if (syntheticBold) {
             const GdiBold bold = GdiBoldFor(emSize, rotCos, rotSin);
             EmboldenLikeGdi(&face->glyph->outline, bold);
@@ -723,19 +732,38 @@ struct RotatedGlyph
     double down;      // half-chord below
     double inkLeft;   // black box along the baseline, from the origin
     double inkRight;
+    /* The half-chords that place the pivot. They differ from up and down
+     * only for a simulated bold glyph, which GDI places by its plain ink. */
+    double pivotUp;
+    double pivotDown;
 
     /* From the pen to the pivot: the half that faces left on screen. */
-    double Left(double sinA) const { return sinA >= 0.0 ? up : down; }
+    double Left(double sinA) const { return sinA >= 0.0 ? pivotUp : pivotDown; }
 };
 
 /* `c` and `s` are |cos| and |sin| of the orientation. */
-RotatedGlyph MeasureRotated(const FT_GlyphSlot slot, double c, double s, double ascent)
+RotatedGlyph MeasureRotated(const FontFaceImpl* impl, double c, double s, double ascent)
 {
+    const FT_GlyphSlot slot = impl->face->glyph;
     RotatedGlyph g;
     g.width = (double)Round26_6(slot->advance.x);
 
-    double top = 0.0, bottom = 0.0;
-    if (slot->outline.n_points > 0) {
+    double top = 0.0, bottom = 0.0, boldTop = 0.0;
+    if (impl->lastEmboldened) {
+        /* GDI measures a simulated bold glyph by its plain ink box grown by
+         * the bold strengths -- Sy at the top, Sx at the right, neither
+         * shrunk nor stretched for the angle -- not by the emboldened
+         * outline; its advance has already grown by the pixel. Probed on
+         * SimSun glyphs falling back from bold Arial at 30 and 45 degrees:
+         * the extent's cx grows by exactly Sx, the steps match to a pixel. */
+        const FT_BBox& box = impl->lastPlainBox;
+        const int sy = (impl->emSize + 49) / 50 - 1;
+        top = box.yMax / 64.0;
+        boldTop = sy;
+        bottom = box.yMin / 64.0;
+        g.inkLeft = std::floor(box.xMin / 64.0);
+        g.inkRight = std::ceil(box.xMax / 64.0) + sy + 1;
+    } else if (slot->outline.n_points > 0) {
         FT_BBox box;
         FT_Outline_Get_BBox(&slot->outline, &box);
         top = box.yMax / 64.0;
@@ -754,8 +782,11 @@ RotatedGlyph MeasureRotated(const FT_GlyphSlot slot, double c, double s, double 
         if (a <= 0.0 || b <= 0.0) return 0.0;
         return 1.0 / std::sqrt((c / a) * (c / a) + (s / b) * (s / b));
     };
-    g.up = radius(half, h2 + (top > 0.0 ? top : 0.0));
+    const double above = top > 0.0 ? top : 0.0;
+    g.up = radius(half, h2 + above + boldTop);
     g.down = radius(half, h2 - (bottom < 0.0 ? bottom : 0.0));
+    g.pivotUp = boldTop ? radius(half, h2 + above) : g.up;
+    g.pivotDown = g.down;
     return g;
 }
 
@@ -965,7 +996,7 @@ bool FontFace::TextExtent(const wchar_t* str, int len, SIZE* extent) const
             const int kern = segments.Next(src);
             if (!src.impl->LoadGlyph(src.glyph)) continue;
 
-            const RotatedGlyph rg = MeasureRotated(src.impl->face->glyph, ac, as, m_metrics.ascent);
+            const RotatedGlyph rg = MeasureRotated(src.impl, ac, as, m_metrics.ascent);
             const bool plain = keep && segments.InBase();
             if (plain) pen += kern;
             const double pivot = pen + rg.Left(s);
@@ -1052,7 +1083,7 @@ bool FontFace::AppendString(const wchar_t* str, int len, int dx, int dy, GlyphPa
         if (!impl->LoadGlyph(src.glyph)) continue;
 
         if (m_impl->rotated) {
-            const RotatedGlyph rg = MeasureRotated(impl->face->glyph, std::fabs(b.cosA),
+            const RotatedGlyph rg = MeasureRotated(impl, std::fabs(b.cosA),
                                                    std::fabs(b.sinA), m_metrics.ascent);
             const bool plain = plainAdvances && segments.InBase();
             if (plain) rotatedPen += kern;

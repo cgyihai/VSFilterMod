@@ -220,7 +220,8 @@ New Roman, Tahoma and Segoe UI, with italic, rules, `\fsp`, `\frz`, `\frs`
 and an SRT-like default style. Against upstream on a Chinese Windows 11 all
 eleven lines measured IoU 0.985–0.999 (0.12–0.67 before glyph fallback).
 `tests/bold.ass` covers synthetic bold on SimHei, SimSun and KaiTi, with
-italic and `\frs`: 0.992–1.000 (0.93–0.95 before).
+italic and `\frs`, and bold fallback glyphs turned by `\frs`: 0.977–1.000
+(0.93–0.95 before).
 
 ## What was removed
 
