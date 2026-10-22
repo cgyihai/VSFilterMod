@@ -1,10 +1,12 @@
 # Building VSFilterMod
 
+**English** | [简体中文](BUILD.zh-CN.md)
+
 VSFilterMod builds two things:
 
 | Target | What it is |
 | --- | --- |
-| `vsfiltermod.dll` / `.so` / `.dylib` | A **CSRI** subtitle renderer plugin. This is the form Aegisub loads on every platform. |
+| `vsfiltermod.dll` / `.so` / `.dylib` | A **CSRI** subtitle renderer plugin — the form Aegisub loads on every platform — that is also an **AviSynth+** plugin (`TextSubMod` / `MaskSubMod`). |
 | `vsfmrender` | A command line tool that renders a script to **BDN+XML** (an index plus one PNG per event). |
 
 Both are built from the same renderer sources, so a subtitle exported to
@@ -107,8 +109,8 @@ terminal to see the loader's warnings.
 | --- | --- | --- | --- |
 | Linux x86_64 | GCC | fontconfig | apt |
 | Linux aarch64 | GCC | fontconfig | apt + sse2neon |
-| macOS arm64 | Clang | CoreText | Homebrew + sse2neon |
-| macOS x86_64 | Clang | CoreText | Homebrew |
+| macOS arm64 (`macos-15`) | Clang | CoreText | Homebrew + sse2neon |
+| macOS x86_64 (`macos-15-intel`) | Clang | CoreText | Homebrew |
 | Windows x86_64 (MSVC) | MSVC | DirectWrite | Meson subprojects, all static |
 | Windows x86_64 (MinGW) | GCC | DirectWrite | MSYS2 |
 
@@ -126,8 +128,21 @@ Two notes:
 * The **MSVC artefact is the redistributable one**: freetype, libpng, zlib and
   the CRT are all linked statically, so `vsfiltermod.dll` is a single file with
   no dependencies beyond `DWrite.dll`, `KERNEL32.dll`, `USER32.dll` and
-  `msvcrt.dll`. The MinGW artefact links against MSYS2's DLLs and is a build
+  `ADVAPI32.dll`. The MinGW artefact links against MSYS2's DLLs and is a build
   check only.
+
+### Releases
+
+Pushing a tag that starts with `v` runs the same matrix and then publishes a
+GitHub Release with one archive per platform (the plugin, `vsfmrender`, the
+licence and the READMEs):
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The MinGW build is not published; it is a build check.
 
 ## Verifying the plugin outside Aegisub
 
@@ -158,8 +173,8 @@ event of `tests/smoke.ass` has the same InTC and OutTC.
 `--fps` takes `num/den` or a decimal; 23.976, 29.97 and 59.94 mean their
 `/1001` rationals, which is what AviSynth gives `MaskSub` for a clip's
 `framerate`. Pass the exact rational if your script uses something else.
-`--fast` renders static lines once instead of on every frame; it produces the
-same events unless RTS misjudges a line as static.
+Every frame is rendered at its own time, as `MaskSubMod` does: its subtitle
+provider reports every line as animated.
 
 What `vsfmrender` does **not** do, that avs2bdnxml does: palette (8-bit PNG)
 output, splitting an event into two graphics, PGS `.sup` output, and

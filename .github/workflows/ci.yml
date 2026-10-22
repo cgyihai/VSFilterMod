@@ -41,14 +41,15 @@ jobs:
             arm: true
 
           - name: macOS arm64 (Clang)
-            os: macos-14
+            os: macos-15
             artifact: macos-arm64
             plugin: build/vsfiltermod.dylib
             renderer: build/src/bdnxml/vsfmrender
             arm: true
 
+          # macos-13 was retired; macos-15-intel is GitHub's x86_64 image.
           - name: macOS x86_64 (Clang)
-            os: macos-13
+            os: macos-15-intel
             artifact: macos-x86_64
             plugin: build/vsfiltermod.dylib
             renderer: build/src/bdnxml/vsfmrender
@@ -225,3 +226,42 @@ jobs:
           name: vsfiltermod-windows-x86_64-mingw
           path: dist/
           if-no-files-found: error
+
+  # On a v* tag, publish the redistributable builds as a GitHub Release: one
+  # archive per platform, holding the plugin, vsfmrender and the docs. The
+  # MinGW build links against MSYS2's DLLs and is left out.
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, mingw]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package
+        run: |
+          mkdir -p release
+          for dir in artifacts/vsfiltermod-*; do
+            name=$(basename "$dir")
+            case "$name" in *mingw*) continue ;; esac
+            rm -f "$dir/smoke.xml"
+            cp LICENSE README.md README.zh-CN.md "$dir/"
+            chmod +x "$dir"/vsfmrender "$dir"/*.so "$dir"/*.dylib 2>/dev/null || true
+            if [[ "$name" == *windows* ]]; then
+              (cd "$dir" && zip -9 -r "../../release/$name-${GITHUB_REF_NAME}.zip" .)
+            else
+              tar -C "$dir" -czf "release/$name-${GITHUB_REF_NAME}.tar.gz" .
+            fi
+          done
+          ls -la release
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
