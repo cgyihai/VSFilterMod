@@ -173,6 +173,57 @@ public:
         return true;
     }
 
+    bool MatchCodePoint(uint32_t cp, int weight, bool italic, FontMatch* out) override
+    {
+        if (!out) return false;
+
+        std::lock_guard<std::mutex> g(m_lock);
+
+        /* CoreText's cascade list, asked through a Latin face: which installed
+         * face would draw this character in its place. */
+        CFHandle<CFStringRef> baseName(MakeCFString("Helvetica"));
+        CFHandle<CTFontRef> base(CTFontCreateWithName(baseName.get(), 12.0, nullptr));
+        if (!base) return false;
+
+        UniChar units[2];
+        CFIndex count = 1;
+        if (cp >= 0x10000) {
+            units[0] = (UniChar)(0xD800 + ((cp - 0x10000) >> 10));
+            units[1] = (UniChar)(0xDC00 + ((cp - 0x10000) & 0x3FF));
+            count = 2;
+        } else {
+            units[0] = (UniChar)cp;
+        }
+        CFHandle<CFStringRef> str(CFStringCreateWithCharacters(kCFAllocatorDefault, units, count));
+        if (!str) return false;
+
+        CFHandle<CTFontRef> font(CTFontCreateForString(base.get(), str.get(),
+                                                       CFRangeMake(0, count)));
+        if (!font) return false;
+
+        /* Asked about a character it cannot place either, CoreText hands the
+         * base face back; FontEngine checks coverage, but skip the file load. */
+        CGGlyph glyphs[2] = { 0, 0 };
+        if (!CTFontGetGlyphsForCharacters(font.get(), units, glyphs, count)) return false;
+
+        CFHandle<CFURLRef> url((CFURLRef)CTFontCopyAttribute(font.get(), kCTFontURLAttribute));
+        if (!url) return false;
+
+        char pathBuf[PATH_MAX];
+        if (!CFURLGetFileSystemRepresentation(url.get(), true, (UInt8*)pathBuf, sizeof(pathBuf)))
+            return false;
+        out->path = pathBuf;
+
+        CFHandle<CFStringRef> psName(CTFontCopyPostScriptName(font.get()));
+        out->faceIndex = ResolveFaceIndex(out->path, CFStringToUtf8(psName.get()));
+
+        const CTFontSymbolicTraits got = CTFontGetSymbolicTraits(font.get());
+        out->syntheticBold = (weight >= FW_BOLD) && !(got & kCTFontTraitBold);
+        out->syntheticItalic = italic && !(got & kCTFontTraitItalic);
+        out->exactFamily = true;
+        return true;
+    }
+
 private:
     /* Caller takes ownership of the returned string. */
     static CFStringRef CharSetProbeString(int charSet)

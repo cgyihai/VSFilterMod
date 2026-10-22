@@ -12,12 +12,16 @@
 #include "../compat/cstring_compat.h"
 
 #include <dwrite.h>
+#include <dwrite_2.h>
 
+#include <algorithm>
+#include <cwchar>
 #include <mutex>
 #include <string>
 #include <vector>
 
 #pragma comment(lib, "dwrite.lib")
+#pragma comment(lib, "advapi32.lib")
 
 namespace vsfm {
 
@@ -66,6 +70,64 @@ const wchar_t* CharSetFallbackFamily(int charSet)
     default:                  return L"Arial";
     }
 }
+
+/* The one character MapCharacters is asked about. DirectWrite's fallback
+ * reads its text through this interface; the object lives on the caller's
+ * stack for the length of the call, so reference counting is a formality. */
+class OneCharSource final : public IDWriteTextAnalysisSource
+{
+public:
+    OneCharSource(const wchar_t* text, UINT32 len) : m_text(text), m_len(len) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override
+    {
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IDWriteTextAnalysisSource)) {
+            *out = this;
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+    ULONG STDMETHODCALLTYPE Release() override { return 1; }
+
+    HRESULT STDMETHODCALLTYPE GetTextAtPosition(UINT32 pos, const WCHAR** text,
+                                                UINT32* len) override
+    {
+        *text = pos < m_len ? m_text + pos : nullptr;
+        *len = pos < m_len ? m_len - pos : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetTextBeforePosition(UINT32 pos, const WCHAR** text,
+                                                    UINT32* len) override
+    {
+        *text = pos > 0 && pos <= m_len ? m_text : nullptr;
+        *len = pos > 0 && pos <= m_len ? pos : 0;
+        return S_OK;
+    }
+    DWRITE_READING_DIRECTION STDMETHODCALLTYPE GetParagraphReadingDirection() override
+    {
+        return DWRITE_READING_DIRECTION_LEFT_TO_RIGHT;
+    }
+    /* No locale: the answer should not depend on the user's language. */
+    HRESULT STDMETHODCALLTYPE GetLocaleName(UINT32 pos, UINT32* len, const WCHAR** name) override
+    {
+        *len = pos < m_len ? m_len - pos : 0;
+        *name = L"";
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetNumberSubstitution(UINT32 pos, UINT32* len,
+                                                    IDWriteNumberSubstitution** sub) override
+    {
+        *len = pos < m_len ? m_len - pos : 0;
+        *sub = nullptr;
+        return S_OK;
+    }
+
+private:
+    const wchar_t* m_text;
+    UINT32 m_len;
+};
 
 class DWriteProvider final : public FontProvider
 {
@@ -149,7 +211,100 @@ public:
         return true;
     }
 
+    std::vector<std::wstring> LinkedFamilies(const std::wstring& family, bool bold) override
+    {
+        std::vector<std::wstring> out;
+        std::wstring name = family;
+        if (!name.empty() && name[0] == L'@') name.erase(0, 1);
+        if (name.empty()) return out;
+
+        if (bold) ReadSystemLink(name + L" Bold", out);
+        ReadSystemLink(name, out);
+        return out;
+    }
+
+    bool MatchCodePoint(uint32_t cp, int weight, bool italic, FontMatch* out) override
+    {
+        if (!out || !m_factory || !m_collection) return false;
+
+        std::lock_guard<std::mutex> g(m_lock);
+
+        /* IDWriteFontFallback needs Windows 8.1; before that there is nothing
+         * to ask, and the caller keeps the .notdef glyph. */
+        if (!m_fallbackTried) {
+            m_fallbackTried = true;
+            ComPtr<IDWriteFactory2> factory2;
+            if (SUCCEEDED(m_factory->QueryInterface(__uuidof(IDWriteFactory2),
+                                                    reinterpret_cast<void**>(&factory2)))
+                && factory2)
+                factory2->GetSystemFontFallback(&m_fallback);
+        }
+        if (!m_fallback) return false;
+
+        wchar_t text[2];
+        UINT32 len = 1;
+        if (cp >= 0x10000) {
+            text[0] = (wchar_t)(0xD800 + ((cp - 0x10000) >> 10));
+            text[1] = (wchar_t)(0xDC00 + ((cp - 0x10000) & 0x3FF));
+            len = 2;
+        } else {
+            text[0] = (wchar_t)cp;
+        }
+
+        OneCharSource source(text, len);
+        UINT32 mapped = 0;
+        ComPtr<IDWriteFont> font;
+        FLOAT scale = 1.0f;
+        if (FAILED(m_fallback->MapCharacters(&source, 0, len, m_collection.get(), nullptr,
+                                             ToDWriteWeight(weight),
+                                             italic ? DWRITE_FONT_STYLE_ITALIC
+                                                    : DWRITE_FONT_STYLE_NORMAL,
+                                             DWRITE_FONT_STRETCH_NORMAL,
+                                             &mapped, &font, &scale))
+            || !font || mapped == 0)
+            return false;
+
+        ComPtr<IDWriteFontFace> fontFace;
+        if (FAILED(font->CreateFontFace(&fontFace)) || !fontFace) return false;
+        if (!ResolveFile(fontFace.get(), out)) return false;
+
+        out->faceIndex = (int)fontFace->GetIndex();
+        out->exactFamily = true;
+        out->syntheticBold = (weight >= FW_BOLD) &&
+                             (font->GetWeight() < DWRITE_FONT_WEIGHT_SEMI_BOLD);
+        out->syntheticItalic = italic &&
+                               (font->GetStyle() == DWRITE_FONT_STYLE_NORMAL);
+        return true;
+    }
+
 private:
+    /* Appends the faces of one SystemLink value. Each entry is
+     * "FILE.TTC,Face Name" with optional scaling numbers after it, which GDI
+     * applies only to UI rendering at other DPIs; entries with no face name
+     * are skipped, and a face listed twice is kept once. */
+    static void ReadSystemLink(const std::wstring& name, std::vector<std::wstring>& out)
+    {
+        static const wchar_t kKey[] =
+            L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontLink\\SystemLink";
+        DWORD bytes = 0;
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, kKey, name.c_str(), RRF_RT_REG_MULTI_SZ,
+                         nullptr, nullptr, &bytes) != ERROR_SUCCESS || bytes == 0)
+            return;
+        std::vector<wchar_t> buf(bytes / sizeof(wchar_t) + 2, L'\0');
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, kKey, name.c_str(), RRF_RT_REG_MULTI_SZ,
+                         nullptr, buf.data(), &bytes) != ERROR_SUCCESS)
+            return;
+
+        for (const wchar_t* e = buf.data(); *e; e += std::wcslen(e) + 1) {
+            const wchar_t* comma = std::wcschr(e, L',');
+            if (!comma || !comma[1]) continue;
+            const wchar_t* end = std::wcschr(comma + 1, L',');
+            std::wstring face = end ? std::wstring(comma + 1, end) : std::wstring(comma + 1);
+            if (!face.empty() && std::find(out.begin(), out.end(), face) == out.end())
+                out.push_back(face);
+        }
+    }
+
     bool MatchLikeGdi(const std::wstring& name, int weight, bool italic,
                       int charSet, FontMatch* out)
     {
@@ -225,6 +380,8 @@ private:
     ComPtr<IDWriteFactory> m_factory;
     ComPtr<IDWriteFontCollection> m_collection;
     ComPtr<IDWriteGdiInterop> m_gdiInterop;
+    ComPtr<IDWriteFontFallback> m_fallback;
+    bool m_fallbackTried = false;
     std::mutex m_lock;
 };
 

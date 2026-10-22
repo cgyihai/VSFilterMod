@@ -126,6 +126,62 @@ public:
         return true;
     }
 
+    bool MatchCodePoint(uint32_t cp, int weight, bool italic, FontMatch* out) override
+    {
+        if (!m_ok || !out) return false;
+
+        std::lock_guard<std::mutex> g(m_lock);
+
+        FcPattern* pat = FcPatternCreate();
+        if (!pat) return false;
+
+        FcCharSet* cs = FcCharSetCreate();
+        FcCharSetAddChar(cs, cp);
+        FcPatternAddCharSet(pat, FC_CHARSET, cs);
+        FcCharSetDestroy(cs);
+        FcPatternAddInteger(pat, FC_WEIGHT, ToFcWeight(weight));
+        FcPatternAddInteger(pat, FC_SLANT, italic ? FC_SLANT_ITALIC : FC_SLANT_ROMAN);
+        FcPatternAddBool(pat, FC_OUTLINE, FcTrue);
+
+        FcConfigSubstitute(nullptr, pat, FcMatchPattern);
+        FcDefaultSubstitute(pat);
+
+        /* FcFontMatch weighs the charset against everything else and may
+         * still hand back a face without the character; the sorted list is
+         * walked for the first one that really has it. */
+        FcResult result = FcResultNoMatch;
+        FcFontSet* set = FcFontSort(nullptr, pat, FcTrue, nullptr, &result);
+        bool found = false;
+        for (int i = 0; set && i < set->nfont && !found; ++i) {
+            FcPattern* cand = FcFontRenderPrepare(nullptr, pat, set->fonts[i]);
+            if (!cand) continue;
+
+            FcCharSet* has = nullptr;
+            FcChar8* file = nullptr;
+            if (FcPatternGetCharSet(cand, FC_CHARSET, 0, &has) == FcResultMatch && has
+                && FcCharSetHasChar(has, cp)
+                && FcPatternGetString(cand, FC_FILE, 0, &file) == FcResultMatch && file) {
+                out->path = (const char*)file;
+                int index = 0;
+                FcPatternGetInteger(cand, FC_INDEX, 0, &index);
+                out->faceIndex = index;
+
+                int gotWeight = FC_WEIGHT_REGULAR;
+                FcPatternGetInteger(cand, FC_WEIGHT, 0, &gotWeight);
+                out->syntheticBold = (weight >= FW_BOLD) && (gotWeight < FC_WEIGHT_DEMIBOLD);
+                int gotSlant = FC_SLANT_ROMAN;
+                FcPatternGetInteger(cand, FC_SLANT, 0, &gotSlant);
+                out->syntheticItalic = italic && (gotSlant == FC_SLANT_ROMAN);
+                out->exactFamily = true;
+                found = true;
+            }
+            FcPatternDestroy(cand);
+        }
+        if (set) FcFontSetDestroy(set);
+        FcPatternDestroy(pat);
+        return found;
+    }
+
 private:
     bool m_ok = false;
     std::mutex m_lock;

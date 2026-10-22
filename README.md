@@ -41,6 +41,20 @@ them on a horizontal line too: CJK glyphs on their side, in their GSUB
 `vert` forms, placed by their vertical metrics. Font *lookup* is still
 native: DirectWrite, CoreText or fontconfig.
 
+**Missing glyphs fall back the way GDI's do.** A character the style's face
+lacks — CJK in Arial, say — is taken from another face instead of drawing a
+box. The engine tries the face's own Windows SystemLink list first (read
+from the registry, as GDI reads it, so Segoe UI gets Microsoft YaHei). Then
+it tries a fixed list that starts with SimSun and Malgun Gothic, which is
+what a Chinese Windows uses, followed by the macOS and Linux CJK faces
+(Songti, PingFang, Hiragino, Noto CJK, Source Han, WenQuanYi, …). Last comes
+the platform's own fallback (DirectWrite, CoreText, fontconfig). The glyph
+sits on the style face's baseline and is sized as GDI sizes it: a face
+whose cell is its em (SimSun, MS Gothic) at the style face's em, any other
+(Microsoft YaHei, Malgun Gothic) at its cell height. Both rules were
+measured against GDI's own paths. See "Glyph fallback" in
+`src/font/font_engine.cpp`.
+
 **Embedded fonts work.** `[Fonts]` attachments are handed to FreeType instead
 of being installed into the OS with `AddFontMemResourceEx`, so they now work
 through CSRI — where they never did before — and on every platform.
@@ -55,7 +69,8 @@ the VapourSynth plugin are not carried over; for those, use upstream.
 **Rendering no longer depends on the machine.** Screen DPI is pinned at 96
 rather than read from a live device context, and charset-to-codepage mapping
 uses a fixed table rather than the host's locale, so the same script renders
-the same everywhere.
+the same everywhere. The one exception is glyph fallback on Windows, which
+follows that machine's SystemLink lists, as GDI does.
 
 Known issues
 ------------
@@ -70,6 +85,12 @@ Known issues
   the port, following the Chinese faces, lays them on their side; and SimSun
   and SimHei space a `\frs` run of kana differently from the other faces.
   Both come from GDI tables that could not be recovered.
+* A face name GDI does not know, such as `@Arial`, makes GDI substitute
+  SimSun for the whole line, Latin included; here the Latin stays in the
+  style face.
+* A `\frs` line that is also synthetic bold and needs glyph fallback (bold
+  CJK in Arial, turned) comes out a little lighter than upstream's (IoU
+  about 0.96–0.97); each of the three alone matches.
 
 Licence
 -------

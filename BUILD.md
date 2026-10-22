@@ -215,6 +215,13 @@ YaHei, DengXian, MS Gothic, Yu Gothic, Malgun Gothic and Times New Roman,
 so run them where those are installed. Against upstream they measured IoU
 0.977–0.999 and 0.967–1.000.
 
+`tests/fallback.ass` covers glyph fallback: CJK and Hangul in Arial, Times
+New Roman, Tahoma and Segoe UI, with italic, rules, `\fsp`, `\frz`, `\frs`
+and an SRT-like default style. Against upstream on a Chinese Windows 11 all
+eleven lines measured IoU 0.985–0.999 (0.12–0.67 before glyph fallback).
+`tests/bold.ass` covers synthetic bold on SimHei, SimSun and KaiTi, with
+italic and `\frs`: 0.992–1.000 (0.93–0.95 before).
+
 ## What was removed
 
 This tree is a cut-down VSFilterMod. Everything specific to DirectShow

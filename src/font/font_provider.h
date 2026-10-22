@@ -12,6 +12,7 @@
 
 #include "../compat/platform.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,25 @@ public:
      * the engine, not the provider, but the provider is asked first so a
      * platform-installed font of the same name does not shadow it. */
     virtual void AddMemoryFamily(const std::wstring& family) { (void)family; }
+
+    /* The faces the platform links to `family` for characters it lacks, in
+     * order: GDI's SystemLink registry list on Windows (the "Bold" entry
+     * first for a bold face), nothing elsewhere. */
+    virtual std::vector<std::wstring> LinkedFamilies(const std::wstring& family, bool bold)
+    {
+        (void)family; (void)bold;
+        return std::vector<std::wstring>();
+    }
+
+    /* An installed face with a glyph for `cp`, chosen by the platform's own
+     * fallback (DirectWrite's system fallback, CoreText's cascade list,
+     * fontconfig's coverage sort). The last resort of FontEngine's glyph
+     * fallback, after its fixed list of CJK faces. */
+    virtual bool MatchCodePoint(uint32_t cp, int weight, bool italic, FontMatch* out)
+    {
+        (void)cp; (void)weight; (void)italic; (void)out;
+        return false;
+    }
 
     static FontProvider& Get();
 };

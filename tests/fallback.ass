@@ -1,0 +1,28 @@
+﻿[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: Ansi,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,0
+Style: Times,Times New Roman,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: Tahoma,Tahoma,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: Segoe,Segoe UI,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: SrtLike,Arial,18,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,3,2,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,Latin 第二行 あア 한글
+Dialogue: 0,0:00:01.00,0:00:02.00,Ansi,,0,0,0,,Encoding 0 字幕测试
+Dialogue: 0,0:00:02.00,0:00:03.00,Times,,0,0,0,,Times 中文字幕
+Dialogue: 0,0:00:03.00,0:00:04.00,Tahoma,,0,0,0,,Tahoma 中文
+Dialogue: 0,0:00:04.00,0:00:05.00,Segoe,,0,0,0,,Segoe UI 中文 한글
+Dialogue: 0,0:00:05.00,0:00:06.00,Default,,0,0,0,,{\i1}斜体 italic
+Dialogue: 0,0:00:06.00,0:00:07.00,Default,,0,0,0,,{\u1\s1}下划线 rules
+Dialogue: 0,0:00:07.00,0:00:08.00,Default,,0,0,0,,{\fsp12}字间距
+Dialogue: 0,0:00:08.00,0:00:09.00,Default,,0,0,0,,{\frz15}旋转 rotated
+Dialogue: 0,0:00:09.00,0:00:10.00,Default,,0,0,0,,{\frs30}旋转字符 AB
+Dialogue: 0,0:00:10.00,0:00:11.00,SrtLike,,0,0,0,,第二行 {\i1}斜体

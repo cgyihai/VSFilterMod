@@ -27,7 +27,10 @@
 #include "../compat/platform.h"
 #include "../compat/atltypes_compat.h"
 
+#include <cstdint>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -83,6 +86,18 @@ struct FontMetrics
 };
 
 class FontFaceImpl;
+class FontFace;
+struct FontData;
+struct FontMatch;
+
+/* Where a code point's glyph comes from: the face itself, or the fallback
+ * face that stands in for it (see "Glyph fallback" in font_engine.cpp). */
+struct GlyphSource
+{
+    const FontFaceImpl* impl = nullptr;
+    unsigned glyph = 0;
+    uint32_t codePoint = 0;
+};
 
 /* One face at one size. Not thread safe on its own -- RTS already serialises
  * rendering behind its own lock, matching the old "one global HDC" contract. */
@@ -105,12 +120,29 @@ private:
     friend class FontEngine;
     FontFace();
 
+    /* Finds a fallback face for every code point of `str` this face has no
+     * glyph for. Opens fonts, so it must run before the FreeType lock is
+     * taken; Resolve then only reads what it found. */
+    void PrepareFallbacks(const wchar_t* str, int len) const;
+    GlyphSource Resolve(uint32_t cp) const;
+    /* Whether any character of `str` is drawn from a fallback face. */
+    bool RunUsesFallback(const wchar_t* str, int len) const;
+
     /* Emits an axis-aligned rectangle, used for the underline and strike-out
      * rules that a GDI path would have contained. */
     static void AppendRule(GlyphPath& path, int x, int y, int w, int h);
 
     std::unique_ptr<FontFaceImpl> m_impl;
     FontMetrics m_metrics;
+    FontDesc m_desc;
+
+    struct Fallback
+    {
+        std::shared_ptr<FontFace> face;   // null: nothing installed covers it
+        unsigned glyph = 0;
+    };
+    mutable std::mutex m_fallbackLock;
+    mutable std::map<uint32_t, Fallback> m_fallbacks;
 };
 
 class FontEngine
@@ -130,6 +162,24 @@ public:
     void ClearMemoryFonts();
 
 private:
+    friend class FontFace;
+
+    /* The face that draws `cp` when `base` has no glyph for it, and that
+     * glyph's index; a null face when no installed font covers it. */
+    std::shared_ptr<FontFace> FindFallback(const FontDesc& base, int baseEm,
+                                           uint32_t cp, unsigned* glyph);
+
+    /* OpenFont, but only when the family really is installed or embedded:
+     * a fallback that the platform quietly substituted would be no fallback. */
+    std::shared_ptr<FontFace> OpenExactFont(const FontDesc& desc);
+    std::shared_ptr<FontFace> OpenFontImpl(const FontDesc& desc, bool exactOnly);
+
+    /* Opens `blob` as the face `match` names, sized and styled per `desc`.
+     * Caller holds m_impl->lock. */
+    std::shared_ptr<FontFace> Build(const FontDesc& desc, FontMatch match,
+                                    const std::shared_ptr<FontData>& blob,
+                                    bool fromMemory, bool vertical);
+
     FontEngine();
     ~FontEngine();
     FontEngine(const FontEngine&) = delete;

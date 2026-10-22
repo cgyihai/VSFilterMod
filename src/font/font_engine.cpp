@@ -14,9 +14,11 @@
 #include FT_SYNTHESIS_H
 #include FT_TRUETYPE_TABLES_H
 
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <mutex>
+#include <set>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -183,6 +185,8 @@ private:
     ~Library() { if (ft) FT_Done_FreeType(ft); }
 };
 
+} // namespace
+
 /* A face file, opened once and shared by every size that uses it. FT_Face is
  * not size-shareable, so each FontFaceImpl gets its own FT_Face but they all
  * reference the same memory blob when the font came from an attachment. */
@@ -192,6 +196,121 @@ struct FontData
     std::string path;
     int faceIndex = 0;
 };
+
+// ---------------------------------------------------------------------------
+// GDI's simulated bold
+// ---------------------------------------------------------------------------
+//
+// Worked out by comparing GetGlyphOutline(GGO_NATIVE | GGO_UNHINTED) of the
+// same glyph at weight 400 and 700, point by point, on SimHei, SimSun, KaiTi
+// and Impact from 40 to 8000 ppem, and on a synthetic font of polygons. It
+// is not an outward offset of the outline:
+//
+//  * With Sy = ceil(ppem / 50) - 1 and Sx = Sy + 1 (whole pixels), the glyph
+//    is first scaled by (ppem - Sy) / ppem about its origin -- the baseline
+//    point -- so it comes out about 2% smaller.
+//
+//  * Then every point moves by (Sx/2 * (1 + vx), Sy/2 * (1 + vy)), v being
+//    the point's miter: the sum of the outward unit normals of its two edges
+//    divided by 1 + their dot product -- a straight edge moves by S/2 along
+//    its normal. So the left and bottom edges stay put and the right and top
+//    ones move by the full S, as with FT_Outline_EmboldenXY, but GDI clamps
+//    each component of v to [-1, 1] where FreeType limits the miter by the
+//    edge lengths instead, which matters at the sharp serifs CJK strokes end
+//    in. Whether a point is on or off the curve makes no difference.
+//
+//  * The advance grows by one pixel, regardless of size; an '@' face's
+//    vertical advance scales with the glyph and then grows by one pixel.
+//
+//  * A rotated font (\frs) is emboldened in glyph space too, then turned,
+//    but both strengths are divided by max(|cos a|, |sin a|) -- 15% heavier
+//    at 30 degrees, 41% at 45. The shrink does not change.
+//
+// A stroke therefore thickens by S - 2% of its width, and a counter shrinks
+// by the same. The residual against GDI is under ppem/1000 per point on
+// polygons; a few points next to a clamped corner or a very short edge land
+// up to ppem/150 off, for a reason not found.
+
+namespace {
+
+struct GdiBold
+{
+    double sx, sy;      // strengths, pixels
+    FT_Fixed scale;     // (ppem - Sy) / ppem
+};
+
+GdiBold GdiBoldFor(int ppem, double rotCos, double rotSin)
+{
+    GdiBold b;
+    if (ppem < 1) ppem = 1;
+    const int sy = (ppem + 49) / 50 - 1;
+    b.scale = FT_DivFix(ppem - sy, ppem);
+    const double stretch = 1.0 / std::max(std::fabs(rotCos), std::fabs(rotSin));
+    b.sy = sy * stretch;
+    b.sx = (sy + 1) * stretch;
+    return b;
+}
+
+void EmboldenLikeGdi(FT_Outline* outline, const GdiBold& bold)
+{
+    const FT_Matrix shrink = { bold.scale, 0, 0, bold.scale };
+    FT_Outline_Transform(outline, &shrink);
+
+    const FT_Orientation orientation = FT_Outline_Get_Orientation(outline);
+    if (orientation == FT_ORIENTATION_NONE) return;
+    /* Outward is to the left of travel for a clockwise (TrueType) outline
+     * in FreeType's y-up space. */
+    const double side = (orientation == FT_ORIENTATION_TRUETYPE) ? 1.0 : -1.0;
+
+    FT_Vector* const pts = outline->points;
+    std::vector<FT_Vector> moved(pts, pts + outline->n_points);
+
+    int first = 0;
+    for (int c = 0; c < outline->n_contours; ++c) {
+        const int last = outline->contours[c];
+        const int n = last - first + 1;
+
+        for (int j = first; j <= last; ++j) {
+            /* The nearest points that do not coincide with this one. */
+            int prev = j, next = j;
+            for (int k = 1; k < n; ++k) {
+                const int i = first + (j - first - k + n) % n;
+                if (pts[i].x != pts[j].x || pts[i].y != pts[j].y) { prev = i; break; }
+            }
+            for (int k = 1; k < n; ++k) {
+                const int i = first + (j - first + k) % n;
+                if (pts[i].x != pts[j].x || pts[i].y != pts[j].y) { next = i; break; }
+            }
+            if (prev == j || next == j) continue;
+
+            double ix = (double)(pts[j].x - pts[prev].x), iy = (double)(pts[j].y - pts[prev].y);
+            double ox = (double)(pts[next].x - pts[j].x), oy = (double)(pts[next].y - pts[j].y);
+            const double il = std::sqrt(ix * ix + iy * iy), ol = std::sqrt(ox * ox + oy * oy);
+            ix /= il; iy /= il; ox /= ol; oy /= ol;
+
+            const double n1x = -iy * side, n1y = ix * side;
+            const double n2x = -oy * side, n2y = ox * side;
+            const double d = 1.0 + n1x * n2x + n1y * n2y;
+
+            double vx, vy;
+            if (d > 1.0 / 1024) {
+                vx = (n1x + n2x) / d;
+                vy = (n1y + n2y) / d;
+            } else {
+                /* The outline doubles back on itself: the tip moves on. */
+                vx = ix * 1024;
+                vy = iy * 1024;
+            }
+            vx = std::min(1.0, std::max(-1.0, vx));
+            vy = std::min(1.0, std::max(-1.0, vy));
+
+            moved[j].x += (FT_Pos)std::lround(bold.sx * 32 * (1.0 + vx));
+            moved[j].y += (FT_Pos)std::lround(bold.sy * 32 * (1.0 + vy));
+        }
+        first = last + 1;
+    }
+    std::copy(moved.begin(), moved.end(), pts);
+}
 
 } // namespace
 
@@ -207,6 +326,9 @@ public:
 
     bool syntheticBold = false;
     bool syntheticItalic = false;
+    /* False when the platform substituted another family for the one asked
+     * for; such a face is never used as a glyph fallback. */
+    bool exactFamily = true;
     bool underline = false;
     bool strikeOut = false;
 
@@ -222,6 +344,14 @@ public:
      * See "Vertical ('@') fonts" below. */
     bool vertical = false;
     std::map<FT_UInt, FT_UInt> vertForms;
+
+    /* The GPOS table and its 'kern' PairPos subtables (offsets into it),
+     * read the first time a fallback run needs kerning. Guarded by the
+     * FreeType lock, which every caller holds. */
+    mutable bool gposRead = false;
+    mutable std::vector<unsigned char> gpos;
+    mutable std::vector<size_t> gposKern;
+    mutable bool gposHasKern = false;   // a 'kern' feature, whatever its lookups
     FT_Pos vertBottom = 0;      // 26.6: usWinAscent + |sTypoDescender|
     mutable FT_Pos vertOriginY = 0;   // 26.6, of the glyph LoadGlyph last loaded
 
@@ -232,6 +362,7 @@ public:
     int strikeOutThickness = 1;
 
     int emSize = 0;
+    bool cellIsEm = false;      // OS/2 usWinAscent + usWinDescent == unitsPerEm
 
     ~FontFaceImpl()
     {
@@ -269,32 +400,26 @@ public:
             vertOriginY = cbox.yMax + face->glyph->metrics.vertBearingY;
         }
 
+        /* See "GDI's simulated bold" above. FT_GlyphSlot_Embolden is the
+         * wrong tool: em/24, not shrunk first, and the advance grows by the
+         * same amount. */
+        if (syntheticBold) {
+            const GdiBold bold = GdiBoldFor(emSize, rotCos, rotSin);
+            EmboldenLikeGdi(&face->glyph->outline, bold);
+            face->glyph->advance.x += 64;
+            face->glyph->metrics.vertAdvance =
+                ((FT_Pos)Round26_6(FT_MulFix(face->glyph->metrics.vertAdvance, bold.scale)) + 1) << 6;
+        }
+
         /* GDI's simulated italic is a shear of 0.3397 (about 18.8 degrees),
          * measured against upstream VSFilterMod as constant across SimHei,
          * SimSun and Microsoft YaHei at 120 and 300px. FT_GlyphSlot_Oblique
          * uses tan(12 deg) = 0.2126, which leans visibly less. Sheared about
-         * the baseline, so the advance and the baseline point are unchanged. */
+         * the baseline, so the advance and the baseline point are unchanged.
+         * GDI shears a simulated bold glyph after emboldening it. */
         if (syntheticItalic) {
             static const FT_Matrix kGdiOblique = { 0x10000, 22263, 0, 0x10000 };
             FT_Outline_Transform(&face->glyph->outline, &kGdiOblique);
-        }
-
-        /* GDI's simulated bold, measured against upstream VSFilterMod on
-         * SimHei at 100/200/400px: strokes grow by em/55 in both x and y,
-         * symmetrically about their centre, and the advance does not change.
-         * FT_GlyphSlot_Embolden is the wrong tool -- it uses em/24, more than
-         * twice as heavy, and widens the advance by the same amount, so every
-         * following glyph drifts right. FT_Outline_Embolden with the measured
-         * strength reproduces GDI; the advance is left alone. */
-        if (syntheticBold) {
-            const FT_Pos em = FT_MulFix(face->units_per_EM, face->size->metrics.y_scale);
-            const FT_Pos strength = em * 10 / 552;
-            FT_Outline_Embolden(&face->glyph->outline, strength);
-            /* FT_Outline_Embolden keeps the left and bottom edges fixed and
-             * grows right and up. GDI grows symmetrically -- the stroke centre
-             * does not move -- so shift back by half the strength. Without
-             * this a bold word lands em/110 to the right of upstream. */
-            FT_Outline_Translate(&face->glyph->outline, -strength / 2, -strength / 2);
         }
         return true;
     }
@@ -343,6 +468,12 @@ public:
 //    CJK character (see RunKeepsAdvances): every glyph of such a run steps by
 //    its plain advance, and the extent is the plain one -- the advances
 //    summed, by the rotated cell height. Rotation and pivots are as above.
+//
+//  * A glyph taken from a fallback face (see "Glyph fallback") always steps
+//    by the ellipse rule, even in such a run, and so does a space after one
+//    (see RunSegments); the run's own glyphs still follow the rule above,
+//    kerned. A run that needs fallback glyphs is measured by the ellipse
+//    rule's cx, with cy left at the cell height.
 //
 // Checked against GDI to within a device pixel -- an eighth of an output
 // pixel at the 8x size RTS renders at -- for Latin text in Arial, Times New
@@ -407,6 +538,182 @@ bool RunKeepsAdvances(const wchar_t* str, int len)
     while (i < len)
         if (KeepsAdvanceWhenRotated(NextCodePoint(str, len, i))) return true;
     return false;
+}
+
+/* Reads the face's GPOS table and collects the PairPos subtables of its
+ * 'kern' feature lookups, any script, unwrapping extension lookups. */
+void ReadGposKern(const FontFaceImpl* impl)
+{
+    impl->gposRead = true;
+    const FT_ULong tag = FT_MAKE_TAG('G', 'P', 'O', 'S');
+    FT_ULong len = 0;
+    if (FT_Load_Sfnt_Table(impl->face, tag, 0, nullptr, &len) != 0 || len < 10) return;
+    std::vector<unsigned char>& t = impl->gpos;
+    t.resize(len);
+    if (FT_Load_Sfnt_Table(impl->face, tag, 0, t.data(), &len) != 0) { t.clear(); return; }
+
+    auto u16 = [&](size_t o) -> unsigned {
+        return o + 2 <= t.size() ? (unsigned)((t[o] << 8) | t[o + 1]) : 0u;
+    };
+    const size_t featureList = u16(6), lookupList = u16(8);
+    std::set<unsigned> lookups;
+    const unsigned features = u16(featureList);
+    for (unsigned i = 0; i < features; ++i) {
+        const size_t rec = featureList + 2 + 6 * i;
+        if (rec + 6 > t.size() || std::memcmp(&t[rec], "kern", 4) != 0) continue;
+        const size_t feature = featureList + u16(rec + 4);
+        const unsigned n = u16(feature + 2);
+        for (unsigned k = 0; k < n; ++k) lookups.insert(u16(feature + 4 + 2 * k));
+    }
+    impl->gposHasKern = !lookups.empty();
+    /* Only plain pair adjustments are applied. Contextual kerning (lookup
+     * types 7 and 8, as in Tahoma) is left out: it kerns nothing outside its
+     * contexts, and the probes found nothing it kerned. */
+    for (unsigned li : lookups) {
+        if (li >= u16(lookupList)) continue;
+        const size_t lookup = lookupList + u16(lookupList + 2 + 2 * li);
+        const unsigned type = u16(lookup), subtables = u16(lookup + 4);
+        for (unsigned k = 0; k < subtables; ++k) {
+            size_t sub = lookup + u16(lookup + 6 + 2 * k);
+            if (type == 9) {
+                if (u16(sub) != 1 || u16(sub + 2) != 2) continue;
+                sub += ((size_t)u16(sub + 4) << 16) | u16(sub + 6);
+            } else if (type != 2) {
+                continue;
+            }
+            impl->gposKern.push_back(sub);
+        }
+    }
+}
+
+/* The x-advance adjustment GPOS 'kern' gives the pair, in font units, and
+ * whether any of its PairPos subtables covers the left glyph at all. */
+int GposPairAdvance(const FontFaceImpl* impl, FT_UInt left, FT_UInt right)
+{
+    const std::vector<unsigned char>& t = impl->gpos;
+    auto u16 = [&](size_t o) -> unsigned {
+        return o + 2 <= t.size() ? (unsigned)((t[o] << 8) | t[o + 1]) : 0u;
+    };
+    /* Index of `g` in a Coverage table, or -1. */
+    auto coverage = [&](size_t at, unsigned g) -> int {
+        const unsigned format = u16(at), count = u16(at + 2);
+        if (format == 1) {
+            for (unsigned i = 0; i < count; ++i)
+                if (u16(at + 4 + 2 * i) == g) return (int)i;
+        } else if (format == 2) {
+            for (unsigned i = 0; i < count; ++i) {
+                const size_t r = at + 4 + 6 * i;
+                if (g >= u16(r) && g <= u16(r + 2)) return (int)(u16(r + 4) + g - u16(r));
+            }
+        }
+        return -1;
+    };
+    auto classOf = [&](size_t at, unsigned g) -> unsigned {
+        const unsigned format = u16(at);
+        if (format == 1) {
+            const unsigned first = u16(at + 2), count = u16(at + 4);
+            return (g >= first && g < first + count) ? u16(at + 6 + 2 * (g - first)) : 0u;
+        }
+        if (format == 2) {
+            const unsigned count = u16(at + 2);
+            for (unsigned i = 0; i < count; ++i) {
+                const size_t r = at + 4 + 6 * i;
+                if (g >= u16(r) && g <= u16(r + 2)) return u16(r + 4);
+            }
+        }
+        return 0u;
+    };
+    auto valueSize = [](unsigned format) -> size_t {
+        size_t n = 0;
+        for (; format; format >>= 1) n += format & 1;
+        return 2 * n;
+    };
+    /* XAdvance of a ValueRecord, or 0 when the format has none. */
+    auto xAdvance = [&](size_t at, unsigned format) -> int {
+        if (!(format & 0x4)) return 0;
+        size_t o = at + ((format & 0x1) ? 2 : 0) + ((format & 0x2) ? 2 : 0);
+        return (int16_t)u16(o);
+    };
+
+    int total = 0;
+    for (size_t sub : impl->gposKern) {
+        const unsigned format = u16(sub);
+        const int index = coverage(sub + u16(sub + 2), left);
+        if (index < 0) continue;
+        const unsigned vf1 = u16(sub + 4), vf2 = u16(sub + 6);
+        const size_t s1 = valueSize(vf1), s2 = valueSize(vf2);
+        if (format == 1) {
+            if ((unsigned)index >= u16(sub + 8)) continue;
+            const size_t set = sub + u16(sub + 10 + 2 * index);
+            const unsigned pairs = u16(set);
+            for (unsigned i = 0; i < pairs; ++i) {
+                const size_t rec = set + 2 + i * (2 + s1 + s2);
+                if (u16(rec) == right) { total += xAdvance(rec + 2, vf1); break; }
+            }
+        } else if (format == 2) {
+            const unsigned c1 = classOf(sub + u16(sub + 8), left);
+            const unsigned c2 = classOf(sub + u16(sub + 10), right);
+            const unsigned n1 = u16(sub + 12), n2 = u16(sub + 14);
+            if (c1 < n1 && c2 < n2)
+                total += xAdvance(sub + 16 + (c1 * n2 + c2) * (s1 + s2), vf1);
+        }
+    }
+    return total;
+}
+
+/* Splits a run into font segments the way the OpenType shaper behind GDI's
+ * glyph fallback does: each glyph belongs to the face that draws it, except
+ * that whitespace stays with the segment before it. Kerning happens only
+ * inside a segment, and under \frs a space after a fallback glyph is spaced
+ * like one. Measured: in Arial with SimSun fallback, "A 中" kerns A-space,
+ * "中 A" kerns neither pair. */
+struct RunSegments
+{
+    const FontFaceImpl* base;
+    bool fallback;            // the run needs glyph fallback at all
+    const FontFaceImpl* seg = nullptr;
+    GlyphSource prev;
+
+    RunSegments(const FontFaceImpl* b, bool f) : base(b), fallback(f) {}
+
+    static bool IsSpace(uint32_t cp)
+    {
+        return cp == 0x20 || cp == 0xA0 || cp == 0x3000 || (cp >= 0x2000 && cp <= 0x200A);
+    }
+
+    /* Advances to `src`; returns the kerning (pixels) that goes before it. */
+    int Next(const GlyphSource& src);
+
+    bool InBase() const { return seg == base; }
+};
+
+/* The kerning GDI gives a pair of neighbouring glyphs of one face in a run
+ * that needs glyph fallback, in whole pixels: the face's GPOS 'kern'
+ * feature, as an OpenType shaper applies it, or its old 'kern' table when
+ * it has no GPOS kerning. */
+int KernPixels(const FontFaceImpl* impl, FT_UInt left, FT_UInt right)
+{
+    if (!left || !right) return 0;
+    if (!impl->gposRead) ReadGposKern(impl);
+    FT_Pos units = 0;
+    if (impl->gposHasKern) {
+        units = GposPairAdvance(impl, left, right);
+    } else if (FT_HAS_KERNING(impl->face)) {
+        FT_Vector v;
+        if (FT_Get_Kerning(impl->face, left, right, FT_KERNING_UNSCALED, &v) == 0) units = v.x;
+    }
+    return units ? Round26_6(FT_MulFix(units, impl->face->size->metrics.x_scale)) : 0;
+}
+
+int RunSegments::Next(const GlyphSource& src)
+{
+    const FontFaceImpl* const prevSeg = seg;
+    seg = (IsSpace(src.codePoint) && prevSeg) ? prevSeg : src.impl;
+    int kern = 0;
+    if (fallback && prev.impl == src.impl && prevSeg == seg)
+        kern = KernPixels(src.impl, prev.glyph, src.glyph);
+    prev = src;
+    return kern;
 }
 
 struct RotatedGlyph
@@ -638,22 +945,29 @@ bool FontFace::TextExtent(const wchar_t* str, int len, SIZE* extent) const
     if (!m_impl || !str) return false;
     if (len < 0) len = (int)std::wcslen(str);
 
+    PrepareFallbacks(str, len);
     std::lock_guard<std::mutex> g(Library::Get().lock);
 
-    if (m_impl->rotated && !RunKeepsAdvances(str, len)) {
+    const bool fallback = RunUsesFallback(str, len);
+    const bool keep = RunKeepsAdvances(str, len);
+
+    if (m_impl->rotated && (!keep || fallback)) {
         const double c = m_impl->rotCos, s = m_impl->rotSin;
         const double ac = std::fabs(c), as = std::fabs(s);
         double pen = 0.0, firstPivot = 0.0, lastPivot = 0.0;
         double lo = 0.0, hi = 0.0;
         bool any = false;
 
+        RunSegments segments(m_impl.get(), fallback);
         int i = 0;
         while (i < len) {
-            uint32_t cp = NextCodePoint(str, len, i);
-            FT_UInt gi = m_impl->GlyphIndex(cp);
-            if (!m_impl->LoadGlyph(gi)) continue;
+            const GlyphSource src = Resolve(NextCodePoint(str, len, i));
+            const int kern = segments.Next(src);
+            if (!src.impl->LoadGlyph(src.glyph)) continue;
 
-            const RotatedGlyph rg = MeasureRotated(m_impl->face->glyph, ac, as, m_metrics.ascent);
+            const RotatedGlyph rg = MeasureRotated(src.impl->face->glyph, ac, as, m_metrics.ascent);
+            const bool plain = keep && segments.InBase();
+            if (plain) pen += kern;
             const double pivot = pen + rg.Left(s);
             /* Along the rotated baseline, (cos a, -sin a) on screen, the
              * pivot has moved pivot * cos a; the ink box sits around it. */
@@ -666,30 +980,34 @@ bool FontFace::TextExtent(const wchar_t* str, int len, SIZE* extent) const
                 if (a1 > hi) hi = a1;
             }
             lastPivot = pivot;
-            pen += rg.up + rg.down;
+            pen += plain ? rg.width : rg.up + rg.down;
         }
 
         if (any) {
             extent->cx = (int)std::floor(hi - lo) + 1;
-            extent->cy = (int)std::lround(m_metrics.height + (lastPivot - firstPivot) * as);
+            if (!fallback)
+                extent->cy = (int)std::lround(m_metrics.height + (lastPivot - firstPivot) * as);
         }
         return true;
     }
 
     int total = 0;
     int i = 0;
+    RunSegments segments(m_impl.get(), fallback);
     while (i < len) {
-        uint32_t cp = NextCodePoint(str, len, i);
-        FT_UInt gi = m_impl->GlyphIndex(cp);
-        if (!m_impl->LoadGlyph(gi)) continue;
+        const GlyphSource src = Resolve(NextCodePoint(str, len, i));
+        /* See "Glyph fallback": such a run is kerned. */
+        total += segments.Next(src);
+        if (!src.impl->LoadGlyph(src.glyph)) continue;
+        const FT_GlyphSlot slot = src.impl->face->glyph;
         /* GDI rounds each advance before accumulating; matching that keeps
          * per-character and whole-run measurements consistent, which the
          * \fsp path in CText depends on. A glyph an '@' face turns on its
          * side steps by its vertical advance. */
-        if (m_impl->vertical && TurnsInVerticalFont(cp))
-            total += Round26_6(m_impl->face->glyph->metrics.vertAdvance);
+        if (src.impl->vertical && TurnsInVerticalFont(src.codePoint))
+            total += Round26_6(slot->metrics.vertAdvance);
         else
-            total += Round26_6(m_impl->face->glyph->advance.x);
+            total += Round26_6(slot->advance.x);
     }
 
     extent->cx = total;
@@ -701,6 +1019,7 @@ bool FontFace::AppendString(const wchar_t* str, int len, int dx, int dy, GlyphPa
     if (!m_impl || !str) return false;
     if (len < 0) len = (int)std::wcslen(str);
 
+    PrepareFallbacks(str, len);
     std::lock_guard<std::mutex> g(Library::Get().lock);
 
     PathBuilder b;
@@ -715,6 +1034,8 @@ bool FontFace::AppendString(const wchar_t* str, int len, int dx, int dy, GlyphPa
 
     double rotatedPen = 0.0;
     const bool plainAdvances = m_impl->rotated && RunKeepsAdvances(str, len);
+    const bool fallback = RunUsesFallback(str, len);
+    RunSegments segments(m_impl.get(), fallback);
     if (m_impl->rotated) {
         b.rotate = true;
         b.originY = dy;   // the pivots sit on the TA_TOP line
@@ -725,36 +1046,40 @@ bool FontFace::AppendString(const wchar_t* str, int len, int dx, int dy, GlyphPa
 
     int i = 0;
     while (i < len) {
-        uint32_t cp = NextCodePoint(str, len, i);
-        FT_UInt gi = m_impl->GlyphIndex(cp);
-        if (!m_impl->LoadGlyph(gi)) continue;
+        const GlyphSource src = Resolve(NextCodePoint(str, len, i));
+        const FontFaceImpl* impl = src.impl;
+        const int kern = segments.Next(src);
+        if (!impl->LoadGlyph(src.glyph)) continue;
 
         if (m_impl->rotated) {
-            const RotatedGlyph rg = MeasureRotated(m_impl->face->glyph, std::fabs(b.cosA),
+            const RotatedGlyph rg = MeasureRotated(impl->face->glyph, std::fabs(b.cosA),
                                                    std::fabs(b.sinA), m_metrics.ascent);
+            const bool plain = plainAdvances && segments.InBase();
+            if (plain) rotatedPen += kern;
             b.halfWidth = rg.width / 2.0;
             b.pivotX = dx + rotatedPen + rg.Left(b.sinA);
-            FT_Outline_Decompose(&m_impl->face->glyph->outline, &kOutlineFuncs, &b);
+            FT_Outline_Decompose(&impl->face->glyph->outline, &kOutlineFuncs, &b);
             b.CloseContour();
-            rotatedPen += plainAdvances ? rg.width : rg.up + rg.down;
+            rotatedPen += plain ? rg.width : rg.up + rg.down;
             continue;
         }
 
-        FT_Pos advance = (FT_Pos)Round26_6(m_impl->face->glyph->advance.x) << 6;
+        b.penX += (FT_Pos)kern << 6;
+        FT_Pos advance = (FT_Pos)Round26_6(impl->face->glyph->advance.x) << 6;
 
         b.sideways = false;
-        if (m_impl->vertical && TurnsInVerticalFont(cp)) {
-            advance = (FT_Pos)Round26_6(m_impl->face->glyph->metrics.vertAdvance) << 6;
-            auto form = m_impl->vertForms.find(gi);
-            if (form != m_impl->vertForms.end() && !m_impl->LoadGlyph(form->second))
-                m_impl->LoadGlyph(gi);
+        if (impl->vertical && TurnsInVerticalFont(src.codePoint)) {
+            advance = (FT_Pos)Round26_6(impl->face->glyph->metrics.vertAdvance) << 6;
+            auto form = impl->vertForms.find(src.glyph);
+            if (form != impl->vertForms.end() && !impl->LoadGlyph(form->second))
+                impl->LoadGlyph(src.glyph);
             b.sideways = true;
-            b.vertOriginY = m_impl->vertOriginY;
-            b.vertBottom = m_impl->vertBottom;
+            b.vertOriginY = impl->vertOriginY;
+            b.vertBottom = impl->vertBottom;
             b.cellTop = dy;
         }
 
-        FT_Outline_Decompose(&m_impl->face->glyph->outline, &kOutlineFuncs, &b);
+        FT_Outline_Decompose(&impl->face->glyph->outline, &kOutlineFuncs, &b);
         b.CloseContour();
 
         b.penX += advance;
@@ -841,6 +1166,10 @@ struct FontEngine::Impl
      * fopen(), which on Windows cannot open a path outside the active ANSI
      * code page -- a real failure mode for user-installed fonts. */
     std::map<std::string, std::shared_ptr<FontData> > blobs;
+
+    /* Glyph-fallback families found not to be installed, so each is looked
+     * up once rather than once per face and character. */
+    std::set<std::wstring> missingFamilies;
 
     std::shared_ptr<FontData> LoadBlob(const std::string& path, int faceIndex);
 
@@ -966,12 +1295,25 @@ void FontEngine::ClearMemoryFonts()
 
 std::shared_ptr<FontFace> FontEngine::OpenFont(const FontDesc& desc)
 {
+    return OpenFontImpl(desc, false);
+}
+
+std::shared_ptr<FontFace> FontEngine::OpenExactFont(const FontDesc& desc)
+{
+    return OpenFontImpl(desc, true);
+}
+
+std::shared_ptr<FontFace> FontEngine::OpenFontImpl(const FontDesc& desc, bool exactOnly)
+{
     std::lock_guard<std::mutex> g(m_impl->lock);
 
     const Impl::Key key = Impl::MakeKey(desc);
     auto it = m_impl->cache.find(key);
     if (it != m_impl->cache.end()) {
-        if (auto live = it->second.lock()) return live;
+        if (auto live = it->second.lock()) {
+            if (exactOnly && !live->m_impl->exactFamily) return nullptr;
+            return live;
+        }
         m_impl->cache.erase(it);
     }
 
@@ -992,17 +1334,27 @@ std::shared_ptr<FontFace> FontEngine::OpenFont(const FontDesc& desc)
         match.faceIndex = mem->second.faceIndex;
         match.exactFamily = true;
         /* Whether bold/italic must be faked depends on what the attachment
-         * already is; decided below, once the face is open. */
+         * already is; decided in Build, once the face is open. */
         fromMemory = true;
     } else {
         if (!FontProvider::Get().Match(family, desc.weight, desc.italic,
                                        desc.charSet, &match))
             return nullptr;
+        if (exactOnly && !match.exactFamily) return nullptr;
         blob = m_impl->LoadBlob(match.path, match.faceIndex);
     }
 
     if (!blob) return nullptr;
 
+    std::shared_ptr<FontFace> face = Build(desc, match, blob, fromMemory, vertical);
+    if (face) m_impl->cache[key] = face;
+    return face;
+}
+
+std::shared_ptr<FontFace> FontEngine::Build(const FontDesc& desc, FontMatch match,
+                                            const std::shared_ptr<FontData>& blob,
+                                            bool fromMemory, bool vertical)
+{
     std::shared_ptr<FontFace> face(new FontFace());
     std::unique_ptr<FontFaceImpl> impl(new FontFaceImpl());
 
@@ -1050,6 +1402,7 @@ std::shared_ptr<FontFace> FontEngine::OpenFont(const FontDesc& desc)
 
     impl->syntheticBold = match.syntheticBold;
     impl->syntheticItalic = match.syntheticItalic;
+    impl->exactFamily = match.exactFamily;
     impl->underline = desc.underline;
     impl->strikeOut = desc.strikeOut;
     impl->data = blob;   // keeps the bytes alive for the FT_Face's lifetime
@@ -1058,8 +1411,259 @@ std::shared_ptr<FontFace> FontEngine::OpenFont(const FontDesc& desc)
         return nullptr;
 
     face->m_impl = std::move(impl);
-    m_impl->cache[key] = face;
+    face->m_desc = desc;
     return face;
+}
+
+// ---------------------------------------------------------------------------
+// Glyph fallback
+// ---------------------------------------------------------------------------
+//
+// A face with no glyph for a character used to draw glyph 0, the .notdef
+// box: "第二行" in Arial came out as three boxes. GDI never does that; it
+// takes the glyph from another face. Probed on a Chinese Windows 11 by
+// comparing GDI's own paths (BeginPath / TextOutW / GetPath) glyph for glyph
+// against each installed face at every size:
+//
+//  * A face with a SystemLink entry in the registry (Segoe UI, Tahoma,
+//    Microsoft Sans Serif, the CJK faces themselves) takes the glyph from the
+//    first face of that list that has it: Microsoft YaHei for Han in Segoe
+//    UI, SimSun in Tahoma.
+//  * A face with none (Arial, Times New Roman, Verdana, Georgia, Comic Sans
+//    MS) takes it from the system's associated DBCS font -- SimSun on a
+//    Chinese system -- and then from SimSun's own SystemLink list, which is
+//    where Hangul comes from: Malgun Gothic.
+//  * The size depends on the fallback face. One whose OS/2 win cell is
+//    exactly its em -- SimSun, NSimSun, MS Gothic, the older CJK faces with
+//    no internal leading -- is drawn at the base face's em (lfHeight =
+//    -(base em)). Any other -- Microsoft YaHei, Malgun Gothic -- gets the
+//    base's lfHeight unchanged, i.e. the base's *cell* height, and comes out
+//    smaller than the Latin text around it, as upstream shows.
+//  * Either way the glyph sits on the base face's baseline and steps by its
+//    own advance; the line keeps the base face's metrics.
+//  * A run that needs a fallback glyph anywhere goes through an OpenType
+//    shaper, and comes out kerned by each face's GPOS 'kern' feature between
+//    neighbouring glyphs of that face -- which GDI otherwise never applies:
+//    "Ta" in Times New Roman is 549 px wide at a 576 px cell, "Ta中" puts the
+//    'a' 36 px further left and measures 36 px short. It is GPOS, not the old
+//    'kern' table: Tahoma's 'kern' table kerns "Ta" but its GPOS does not,
+//    and GDI does not; Segoe UI's two disagree, and GDI follows GPOS. The
+//    shaper splits the run into one segment per face, whitespace staying
+//    with the segment before it, and kerns only inside a segment.
+//
+// Checked exact, point for point, at cell heights 240, 400 and 480.
+//
+// So: the platform's link list for the base face first (only Windows has
+// one), then a fixed list that starts with SimSun and Malgun Gothic, so a
+// Chinese Windows renders as upstream does. The faces after those are what
+// macOS and Linux have instead; with no GDI to copy they are sized at the
+// base's em, so CJK text is as large as the Latin text it sits in. The
+// platform's own fallback is the last resort, for anything else.
+
+namespace {
+
+/* How a fallback face is sized; see "Glyph fallback". */
+enum class FallbackSize
+{
+    Gdi,   // the base's em if the face's cell is its em, else the base's cell
+    Em,    // the base's em
+};
+
+struct FallbackFace
+{
+    const wchar_t* family;
+    FallbackSize size;
+};
+
+const FallbackFace kFallbackFaces[] = {
+    // Windows, in the order GDI was measured to use them.
+    { L"SimSun",               FallbackSize::Gdi },
+    { L"NSimSun",              FallbackSize::Gdi },
+    { L"Malgun Gothic",        FallbackSize::Gdi },
+    { L"Microsoft YaHei",      FallbackSize::Gdi },
+    { L"Microsoft JhengHei",   FallbackSize::Gdi },
+    { L"Yu Gothic",            FallbackSize::Gdi },
+    { L"Meiryo",               FallbackSize::Gdi },
+    { L"MS Gothic",            FallbackSize::Gdi },
+    // macOS.
+    { L"Songti SC",             FallbackSize::Em },
+    { L"STSong",                FallbackSize::Em },
+    { L"PingFang SC",           FallbackSize::Em },
+    { L"Hiragino Sans GB",      FallbackSize::Em },
+    { L"Apple SD Gothic Neo",   FallbackSize::Em },
+    { L"Hiragino Sans",         FallbackSize::Em },
+    { L"Heiti SC",              FallbackSize::Em },
+    // Linux, and anywhere the Noto / Source Han families are installed.
+    { L"Noto Serif CJK SC",     FallbackSize::Em },
+    { L"Source Han Serif SC",   FallbackSize::Em },
+    { L"Noto Serif SC",         FallbackSize::Em },
+    { L"Noto Sans CJK SC",      FallbackSize::Em },
+    { L"Source Han Sans SC",    FallbackSize::Em },
+    { L"Noto Sans SC",          FallbackSize::Em },
+    { L"Noto Sans CJK JP",      FallbackSize::Em },
+    { L"Noto Sans CJK KR",      FallbackSize::Em },
+    { L"Noto Sans CJK TC",      FallbackSize::Em },
+    { L"WenQuanYi Zen Hei",     FallbackSize::Em },
+    { L"WenQuanYi Micro Hei",   FallbackSize::Em },
+    { L"Droid Sans Fallback",   FallbackSize::Em },
+    { L"AR PL UMing CN",        FallbackSize::Em },
+    { L"Arial Unicode MS",      FallbackSize::Em },
+};
+
+/* Characters that draw nothing: controls, zero-width and bidi marks,
+ * variation selectors. A face may well lack them, and no other face would
+ * draw anything better, so they never trigger a font lookup. */
+bool NeedsNoFallback(uint32_t cp)
+{
+    return cp < 0x20 || (cp >= 0x7F && cp < 0xA0)
+        || (cp >= 0x200B && cp <= 0x200F) || (cp >= 0x2028 && cp <= 0x202E)
+        || (cp >= 0x2060 && cp <= 0x206F) || (cp >= 0xFE00 && cp <= 0xFE0F)
+        || cp == 0xFEFF || (cp >= 0xE0000 && cp <= 0xE0FFF);
+}
+
+} // namespace
+
+void FontFace::PrepareFallbacks(const wchar_t* str, int len) const
+{
+    std::vector<uint32_t> missing;
+    {
+        std::lock_guard<std::mutex> lib(Library::Get().lock);
+        std::lock_guard<std::mutex> fb(m_fallbackLock);
+        int i = 0;
+        while (i < len) {
+            const uint32_t cp = NextCodePoint(str, len, i);
+            if (NeedsNoFallback(cp) || m_impl->GlyphIndex(cp) != 0) continue;
+            if (m_fallbacks.count(cp)) continue;
+            if (std::find(missing.begin(), missing.end(), cp) == missing.end())
+                missing.push_back(cp);
+        }
+    }
+
+    /* Opening fonts takes the engine's lock and then FreeType's, so neither
+     * of ours may be held here. */
+    for (uint32_t cp : missing) {
+        Fallback f;
+        f.face = FontEngine::Get().FindFallback(m_desc, m_impl->emSize, cp, &f.glyph);
+        std::lock_guard<std::mutex> fb(m_fallbackLock);
+        m_fallbacks.emplace(cp, f);
+    }
+}
+
+bool FontFace::RunUsesFallback(const wchar_t* str, int len) const
+{
+    int i = 0;
+    while (i < len)
+        if (Resolve(NextCodePoint(str, len, i)).impl != m_impl.get()) return true;
+    return false;
+}
+
+GlyphSource FontFace::Resolve(uint32_t cp) const
+{
+    GlyphSource src;
+    src.impl = m_impl.get();
+    src.codePoint = cp;
+    src.glyph = m_impl->GlyphIndex(cp);
+    if (src.glyph != 0) return src;
+
+    std::lock_guard<std::mutex> fb(m_fallbackLock);
+    auto it = m_fallbacks.find(cp);
+    if (it != m_fallbacks.end() && it->second.face) {
+        src.impl = it->second.face->m_impl.get();
+        src.glyph = it->second.glyph;
+    }
+    return src;
+}
+
+std::shared_ptr<FontFace> FontEngine::FindFallback(const FontDesc& base, int baseEm,
+                                                   uint32_t cp, unsigned* glyph)
+{
+    *glyph = 0;
+
+    std::wstring baseFamily = base.faceName;
+    const bool vertical = !baseFamily.empty() && baseFamily[0] == L'@';
+    if (vertical) baseFamily.erase(0, 1);
+    baseFamily = ToLower(baseFamily);
+
+    /* The fallback carries the base's weight and slant, so a bold italic line
+     * stays bold italic, but not its rules: those belong to the run, which
+     * the base face lays out. It keeps the base's orientation too, though the
+     * base turns and places its glyphs: GDI emboldens a turned glyph by a
+     * strength that depends on the angle (see "GDI's simulated bold"). */
+    FontDesc d = base;
+    d.underline = false;
+    d.strikeOut = false;
+
+    auto covers = [&](const std::shared_ptr<FontFace>& f) -> unsigned {
+        if (!f) return 0;
+        std::lock_guard<std::mutex> lg(Library::Get().lock);
+        return f->m_impl->GlyphIndex(cp);
+    };
+
+    std::vector<FallbackFace> candidates;
+    const std::vector<std::wstring> linked =
+        FontProvider::Get().LinkedFamilies(baseFamily, base.weight >= FW_BOLD);
+    for (const std::wstring& family : linked)
+        candidates.push_back({ family.c_str(), FallbackSize::Gdi });
+    for (const FallbackFace& ff : kFallbackFaces)
+        candidates.push_back(ff);
+
+    for (const FallbackFace& ff : candidates) {
+        const std::wstring family = ff.family;
+        if (ToLower(family) == baseFamily) continue;
+        {
+            std::lock_guard<std::mutex> g(m_impl->lock);
+            if (m_impl->missingFamilies.count(family)) continue;
+        }
+
+        d.faceName = (vertical ? L"@" : L"") + family;
+        d.height = (ff.size == FallbackSize::Em && base.height > 0) ? -baseEm : base.height;
+
+        std::shared_ptr<FontFace> f = OpenExactFont(d);
+        if (!f) {
+            std::lock_guard<std::mutex> g(m_impl->lock);
+            m_impl->missingFamilies.insert(family);
+            continue;
+        }
+        const unsigned gi = covers(f);
+        if (!gi) continue;
+
+        if (ff.size == FallbackSize::Gdi && base.height > 0 && f->m_impl->cellIsEm) {
+            d.height = -baseEm;
+            f = OpenExactFont(d);
+            if (!f) continue;
+        }
+        *glyph = gi;
+        return f;
+    }
+
+    /* Last resort: whatever the platform itself would fall back to. */
+    FontMatch match;
+    if (!FontProvider::Get().MatchCodePoint(cp, base.weight, base.italic, &match))
+        return nullptr;
+
+    /* Cached under the file and face index the platform chose, which cannot
+     * collide with a family name. */
+    d.faceName = (vertical ? L"@" : L"") + vsfm::U82W(match.path.c_str(), match.path.size())
+               + L"#" + std::to_wstring(match.faceIndex);
+    d.height = base.height > 0 ? -baseEm : base.height;
+
+    std::shared_ptr<FontFace> f;
+    {
+        std::lock_guard<std::mutex> g(m_impl->lock);
+        const Impl::Key key = Impl::MakeKey(d);
+        auto it = m_impl->cache.find(key);
+        if (it != m_impl->cache.end()) f = it->second.lock();
+        if (!f) {
+            std::shared_ptr<FontData> blob = m_impl->LoadBlob(match.path, match.faceIndex);
+            if (blob) f = Build(d, match, blob, false, vertical);
+            if (f) m_impl->cache[key] = f;
+        }
+    }
+    if (unsigned gi = covers(f)) {
+        *glyph = gi;
+        return f;
+    }
+    return nullptr;
 }
 
 /* Reproduces GDI's mapping from LOGFONT::lfHeight to a rasterisation size.
@@ -1110,6 +1714,7 @@ bool FontEngine::SetupSize(FontFaceImpl* impl, const FontDesc& desc, FontMetrics
 
     if (FT_Set_Pixel_Sizes(f, 0, (FT_UInt)emPixels) != 0) return false;
     impl->emSize = emPixels;
+    impl->cellIsEm = (winAscent + winDescent == (int)f->units_per_EM);
 
     const FT_Fixed yScale = f->size->metrics.y_scale;
 
