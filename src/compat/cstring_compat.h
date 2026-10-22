@@ -325,22 +325,41 @@ public:
 
     // -- formatting ---------------------------------------------------------
 
-    void Format(const T* fmt, ...)
+    /* Variadic templates in front of the C varargs: every CStringT argument
+     * is passed on as its character pointer. ATL's CString is a single
+     * pointer, so MFC-era code hands CString objects straight to "%s"; this
+     * class holds a std::basic_string, and passing that through '...' is
+     * undefined behaviour -- garbage on MSVC and GCC, a hard error on Clang. */
+    template <typename... A>
+    void Format(const T* fmt, A&&... args)
+    {
+        FormatC(fmt, VarArg(std::forward<A>(args))...);
+    }
+    template <typename... A>
+    void AppendFormat(const T* fmt, A&&... args)
+    {
+        CStringT tmp;
+        tmp.FormatC(fmt, VarArg(std::forward<A>(args))...);
+        m_str += tmp.m_str;
+    }
+    void FormatC(const T* fmt, ...)
     {
         va_list ap;
         va_start(ap, fmt);
         FormatV(fmt, ap);
         va_end(ap);
     }
-    void AppendFormat(const T* fmt, ...)
+
+    template <typename A>
+    static decltype(auto) VarArg(A&& a)
     {
-        CStringT tmp;
-        va_list ap;
-        va_start(ap, fmt);
-        tmp.FormatV(fmt, ap);
-        va_end(ap);
-        m_str += tmp.m_str;
+        typedef typename std::decay<A>::type D;
+        if constexpr (std::is_same<D, CStringT<char> >::value || std::is_same<D, CStringT<wchar_t> >::value)
+            return a.GetString();
+        else
+            return std::forward<A>(a);
     }
+
     void FormatV(const T* fmt, va_list ap)
     {
         StringType nf = NormalizeFormat(fmt);

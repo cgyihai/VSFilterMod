@@ -28,8 +28,21 @@ inline CStringW AToT(const CStringA& s) { return CStringW(s); }
 
 #if !defined(_WIN32)
 
-#define _tcsnicmp  wcsncasecmp
-#define _tcsicmp   wcscasecmp
+/* platform.h's own _wcsnicmp/_wcsicmp, not wcsncasecmp/wcscasecmp: those
+ * need _GNU_SOURCE or _DARWIN_C_SOURCE to be declared at all. */
+#define _tcsnicmp  _wcsnicmp
+#define _tcsicmp   _wcsicmp
+#define wcsnicmp   _wcsnicmp
+#define wcsicmp    _wcsicmp
+#define _istspace  iswspace
+#define _istdigit  iswdigit
+#define _istupper  iswupper
+#define _istlower  iswlower
+#define _istalpha  iswalpha
+#define _istalnum  iswalnum
+#define _istxdigit iswxdigit
+#define _totupper  towupper
+#define _totlower  towlower
 #define _tcscmp    wcscmp
 #define _tcsncmp   wcsncmp
 #define _tcslen    wcslen

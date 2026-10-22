@@ -2360,12 +2360,11 @@ void CSimpleTextSubtitle::ChangeUnknownStylesToDefault()
         {
             if(!unknown.Lookup(stse.style, val))
             {
+                /* Used to raise a modal MessageBox. Like the syntax-error
+                 * dialog below, it would hang Aegisub's render thread or a
+                 * batch BDN+XML job; the line still falls back to Default. */
                 if(fReport)
-                {
-                    CString msg;
-                    msg.Format(_T("Unknown style found: \"%s\", changed to \"Default\"!\n\nPress Cancel to ignore further warnings."), stse.style);
-                    if(MessageBox(NULL, msg, _T("Warning"), MB_OKCANCEL | MB_ICONWARNING) != IDOK) fReport = false;
-                }
+                    TRACE("STS: unknown style \"%ls\", using Default\n", (LPCWSTR)stse.style);
 
                 unknown[stse.style] = NULL;
             }
