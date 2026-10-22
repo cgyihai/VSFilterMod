@@ -1,0 +1,51 @@
+diff --git a/meson.build b/meson.build
+index 8655661..1045d40 100644
+--- a/meson.build
++++ b/meson.build
+@@ -450,7 +450,11 @@ endif
+ 
+ deps += dep_gl
+ 
+-if not get_option('csri').disabled() and host_machine.system() == 'windows'
++# The bundled CSRI loader is portable: the win32 half enumerates plugins with
++# LoadLibrary, the posix half with dlopen. This was gated to Windows only
++# because the posix half was never wired up in the meson build -- see the
++# CSRI_PATH note in subprojects/csri/meson.build.
++if not get_option('csri').disabled()
+ 	conf.set('WITH_CSRI', 1)
+ 
+ 	csri_sp = subproject('csri')
+diff --git a/subprojects/csri/meson.build b/subprojects/csri/meson.build
+index f5d3388..6b98698 100644
+--- a/subprojects/csri/meson.build
++++ b/subprojects/csri/meson.build
+@@ -7,6 +7,7 @@ csri_sources = [
+ ]
+ 
+ csri_inc = [include_directories('include')]
++csri_args = []
+ 
+ if host_machine.system() == 'windows'
+     csri_inc += include_directories('lib/win32')
+@@ -14,7 +15,20 @@ if host_machine.system() == 'windows'
+ else
+     csri_inc += include_directories('lib/posix')
+     csri_sources += ['lib/posix/enumerate.c', 'subhelp/posix/openfile.c']
++
++    # lib/posix/enumerate.c opens with
++    #     static const char csri_path[] = CSRI_PATH;
++    # Autotools supplied that define from lib/Makefile.am; this meson build
++    # never did, so the file could not compile at all -- which is the real
++    # reason CSRI was Windows-only here.
++    #
++    # Colon separated, and the enumerator expands a leading ~. Whatever is in
++    # the CSRI_PATH environment variable is appended to this list at runtime.
++    csri_path = '~/.csri:' + (get_option('prefix') / get_option('libdir') / 'csri')
++    csri_args += '-DCSRI_PATH="' + csri_path + '"'
+ endif
+ 
+-csri = library('csri', csri_sources, include_directories: csri_inc)
++csri = library('csri', csri_sources,
++               include_directories: csri_inc,
++               c_args: csri_args)
+ csri_dep = declare_dependency(link_with: csri, include_directories: csri_inc)

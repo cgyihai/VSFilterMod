@@ -1,0 +1,13 @@
+option('font_backend', type : 'combo',
+    choices : ['auto', 'fontconfig', 'coretext', 'dwrite'],
+    value : 'auto',
+    description : 'Font lookup backend (auto: dwrite on Windows, coretext on macOS, fontconfig elsewhere)')
+
+option('bdnxml', type : 'boolean', value : true,
+    description : 'Build the BDN+XML renderer (vsfmrender)')
+
+option('tests', type : 'boolean', value : true,
+    description : 'Build and register the CSRI ABI test')
+
+option('avisynth', type : 'boolean', value : true,
+    description : 'Include the AviSynth+ entry points (TextSubMod, MaskSubMod) in the plugin')

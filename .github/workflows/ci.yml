@@ -1,0 +1,267 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # Git Bash is present on the Windows runners, so every step below can
+        # be written once instead of twice.
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64 (GCC)
+            os: ubuntu-latest
+            artifact: linux-x86_64
+            plugin: build/vsfiltermod.so
+            renderer: build/src/bdnxml/vsfmrender
+
+          # GitHub's ARM runners are free for public repositories only. If this
+          # repository is private, delete this entry: the label will never match
+          # a runner and the job queues indefinitely instead of failing.
+          - name: Linux aarch64 (GCC)
+            os: ubuntu-24.04-arm
+            artifact: linux-aarch64
+            plugin: build/vsfiltermod.so
+            renderer: build/src/bdnxml/vsfmrender
+            arm: true
+
+          - name: macOS arm64 (Clang)
+            os: macos-15
+            artifact: macos-arm64
+            plugin: build/vsfiltermod.dylib
+            renderer: build/src/bdnxml/vsfmrender
+            arm: true
+
+          # macos-13 was retired; macos-15-intel is GitHub's x86_64 image.
+          - name: macOS x86_64 (Clang)
+            os: macos-15-intel
+            artifact: macos-x86_64
+            plugin: build/vsfiltermod.dylib
+            renderer: build/src/bdnxml/vsfmrender
+
+          - name: Windows x86_64 (MSVC)
+            os: windows-latest
+            artifact: windows-x86_64-msvc
+            plugin: build/vsfiltermod.dll
+            renderer: build/src/bdnxml/vsfmrender.exe
+            windows: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Meson and Ninja
+        run: python -m pip install --upgrade meson ninja
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libfreetype-dev \
+            libpng-dev \
+            libfontconfig1-dev \
+            fonts-liberation \
+            fonts-dejavu-core
+          # Liberation Sans is metric-compatible with Arial and fontconfig
+          # aliases it, so the fixture's "Arial" resolves to a real face
+          # instead of rendering blank.
+          fc-cache -f
+          fc-match Arial
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install pkg-config freetype libpng
+          echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/share/pkgconfig" >> "$GITHUB_ENV"
+
+      # The SSE2 blend kernels run through sse2neon on AArch64. It is optional
+      # -- without it the scalar kernels are used and output is identical, just
+      # slower -- but the published artefacts should have it.
+      - name: Fetch sse2neon (AArch64)
+        if: matrix.arm
+        run: |
+          mkdir -p thirdparty
+          curl -fsSL --retry 3 -o thirdparty/sse2neon.h \
+            https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h
+          echo "VSFM_EXTRA_ARGS=-Dcpp_args=-I${{ github.workspace }}/thirdparty" >> "$GITHUB_ENV"
+
+      - name: Configure (Unix)
+        if: ${{ !matrix.windows }}
+        run: meson setup build ${VSFM_EXTRA_ARGS:-}
+
+      # freetype, libpng and zlib come from subprojects here, all linked
+      # statically, and b_vscrt pulls in the CRT statically too. The result is
+      # a plugin that is one self-contained file -- which is what you drop into
+      # Aegisub's csri directory -- and an ABI test that needs nothing beside it
+      # on PATH. Nothing crosses the CRT boundary (the CSRI ABI is plain C
+      # types and the PNG I/O is driven by our own callbacks), so a statically
+      # linked CRT inside a host that uses the dynamic one is safe here.
+      # FreeType's optional dependencies are all off; none affect outlines.
+      - name: Configure (Windows)
+        if: matrix.windows
+        run: >
+          meson setup build --vsenv
+          -Db_vscrt=static_from_buildtype
+          -Dfreetype2:default_library=static
+          -Dlibpng:default_library=static
+          -Dzlib:default_library=static
+          -Dfreetype2:harfbuzz=disabled
+          -Dfreetype2:brotli=disabled
+          -Dfreetype2:bzip2=disabled
+          -Dfreetype2:png=disabled
+          -Dfreetype2:zlib=internal
+          -Dfreetype2:tests=disabled
+
+      - name: Build
+        run: meson compile -C build
+
+      # Loads the plugin the way Aegisub's CSRI loader does -- by path,
+      # resolving each entry point by name -- then renders through it.
+      - name: Test
+        run: meson test -C build --print-errorlogs --suite vsfiltermod
+
+      # Proves the platform's font backend actually resolved a face: the
+      # checker fails on a fully transparent image, not merely on a bad exit
+      # code, and cross-checks every declared size against the real PNG.
+      - name: Render and validate BDN+XML
+        run: |
+          mkdir -p out
+          "${{ matrix.renderer }}" --quiet --size 1280x720 --fps 23.976 \
+            tests/smoke.ass out/smoke.xml
+          python tests/check_bdnxml.py --min-events 5 out/smoke.xml
+
+      - name: Report exported symbols
+        run: |
+          if command -v nm >/dev/null 2>&1; then
+            nm -gD --defined-only "${{ matrix.plugin }}" 2>/dev/null | grep -i csri || \
+            nm -gU "${{ matrix.plugin }}" 2>/dev/null | grep -i csri || true
+          fi
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp "${{ matrix.plugin }}" dist/
+          cp "${{ matrix.renderer }}" dist/
+          cp out/smoke.xml dist/
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsfiltermod-${{ matrix.artifact }}
+          path: dist/
+          if-no-files-found: error
+
+  # Covers the GCC-on-Windows path and the pkg-config route, which the MSVC
+  # job (all subprojects, static) does not exercise. Its artefact links against
+  # MSYS2's freetype/libpng/zlib DLLs, so it is a build check rather than
+  # something redistributable -- take the MSVC artefact for that.
+  mingw:
+    name: Windows x86_64 (MinGW)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-freetype
+            mingw-w64-x86_64-libpng
+            python
+
+      - name: Configure
+        run: meson setup build
+
+      - name: Build
+        run: meson compile -C build
+
+      - name: Test
+        run: meson test -C build --print-errorlogs --suite vsfiltermod
+
+      - name: Render and validate BDN+XML
+        run: |
+          mkdir -p out
+          ./build/src/bdnxml/vsfmrender.exe --quiet --size 1280x720 --fps 23.976 \
+            tests/smoke.ass out/smoke.xml
+          python tests/check_bdnxml.py --min-events 5 out/smoke.xml
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp build/vsfiltermod.dll dist/
+          cp build/src/bdnxml/vsfmrender.exe dist/
+          cp out/smoke.xml dist/
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsfiltermod-windows-x86_64-mingw
+          path: dist/
+          if-no-files-found: error
+
+  # On a v* tag, publish the redistributable builds as a GitHub Release: one
+  # archive per platform, holding the plugin, vsfmrender and the docs. The
+  # MinGW build links against MSYS2's DLLs and is left out.
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, mingw]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package
+        run: |
+          mkdir -p release
+          for dir in artifacts/vsfiltermod-*; do
+            name=$(basename "$dir")
+            case "$name" in *mingw*) continue ;; esac
+            rm -f "$dir/smoke.xml"
+            cp LICENSE README.md README.zh-CN.md "$dir/"
+            chmod +x "$dir"/vsfmrender "$dir"/*.so "$dir"/*.dylib 2>/dev/null || true
+            if [[ "$name" == *windows* ]]; then
+              (cd "$dir" && zip -9 -r "../../release/$name-${GITHUB_REF_NAME}.zip" .)
+            else
+              tar -C "$dir" -czf "release/$name-${GITHUB_REF_NAME}.tar.gz" .
+            fi
+          done
+          ls -la release
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
