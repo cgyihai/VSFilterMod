@@ -1,6 +1,6 @@
 # VSFilterMod — cross-platform
 
-[![CI](https://github.com/__REPO__/actions/workflows/ci.yml/badge.svg)](https://github.com/__REPO__/actions/workflows/ci.yml)
+[![CI](https://github.com/cgyihai/VSFilterMod/actions/workflows/ci.yml/badge.svg)](https://github.com/cgyihai/VSFilterMod/actions/workflows/ci.yml)
 [![License: GPL v2+](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)
 
@@ -47,9 +47,9 @@ Z-coordinates and vertical spacing.
 ## Downloads
 
 Every push is built by GitHub Actions on all platforms. Tagged versions are
-published on the [Releases](https://github.com/__REPO__/releases) page; builds
+published on the [Releases](https://github.com/cgyihai/VSFilterMod/releases) page; builds
 of any commit are under the run's *Artifacts* on the
-[Actions](https://github.com/__REPO__/actions) page.
+[Actions](https://github.com/cgyihai/VSFilterMod/actions) page.
 
 | Platform | Archive | Contents |
 | --- | --- | --- |

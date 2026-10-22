@@ -1,6 +1,6 @@
 # VSFilterMod — 跨平台版
 
-[![CI](https://github.com/__REPO__/actions/workflows/ci.yml/badge.svg)](https://github.com/__REPO__/actions/workflows/ci.yml)
+[![CI](https://github.com/cgyihai/VSFilterMod/actions/workflows/ci.yml/badge.svg)](https://github.com/cgyihai/VSFilterMod/actions/workflows/ci.yml)
 [![License: GPL v2+](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)
 
@@ -44,8 +44,8 @@ Z 坐标、竖向间距等。
 ## 下载
 
 每次推送都会由 GitHub Actions 在所有平台上自动编译。打了版本标签的正式版发布在
-[Releases](https://github.com/__REPO__/releases) 页面；任意一次提交的编译结果，
-可以在 [Actions](https://github.com/__REPO__/actions) 页面对应运行的
+[Releases](https://github.com/cgyihai/VSFilterMod/releases) 页面；任意一次提交的编译结果，
+可以在 [Actions](https://github.com/cgyihai/VSFilterMod/actions) 页面对应运行的
 *Artifacts* 里下载。
 
 | 平台 | 压缩包 | 内容 |
