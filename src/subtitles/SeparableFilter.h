@@ -27,6 +27,7 @@
 #include <omp.h>
 #endif
 #include <math.h>
+#include "../compat/det_math.h"
 
 // Filter an image in horizontal direction with a one-dimensional filter
 // PixelWidth is the distance in bytes between pixels
@@ -97,7 +98,7 @@ static inline double NormalDist(double sigma, double x)
 {
     if(sigma <= 0 && x == 0) return 1;
     else if(sigma <= 0) return 0;
-    else return exp(-(x * x) / (2 * sigma * sigma)) / (sigma * sqrt(2 * 3.1415926535));
+    else return vsfm::DetExp(-(x * x) / (2 * sigma * sigma)) / (sigma * sqrt(2 * 3.1415926535));
 }
 
 

@@ -20,6 +20,7 @@
  */
 
 #include "../compat/vsfm_compat.h"
+#include "vsfm_version.h"
 #include "../subtitles/RTS.h"
 
 #include <limits>
@@ -237,14 +238,14 @@ static void vsfilter_push_packet(csri_inst *inst, const void *packet, size_t pac
     Explode(str, sl, ',', fields);
     if(sl.GetCount() == fields)
     {
-        stse.readorder = wcstol(sl.RemoveHead(), NULL, 10);
-        stse.layer = wcstol(sl.RemoveHead(), NULL, 10);
+        stse.readorder = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
+        stse.layer = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
         stse.style = sl.RemoveHead();
         stse.actor = sl.RemoveHead();
-        stse.marginRect.left = wcstol(sl.RemoveHead(), NULL, 10);
-        stse.marginRect.right = wcstol(sl.RemoveHead(), NULL, 10);
-        stse.marginRect.top = stse.marginRect.bottom = wcstol(sl.RemoveHead(), NULL, 10);
-        if(fields == 10) stse.marginRect.bottom = wcstol(sl.RemoveHead(), NULL, 10);
+        stse.marginRect.left = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
+        stse.marginRect.right = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
+        stse.marginRect.top = stse.marginRect.bottom = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
+        if(fields == 10) stse.marginRect.bottom = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
         stse.effect = sl.RemoveHead();
         stse.str = sl.RemoveHead();
     }
@@ -307,7 +308,7 @@ static struct csri_info csri_vsfilter_info =
     // 2.38-0611-4 fixes be1-dots and ugly-fade bugs and adds xbord/ybord/xshad/yshad/blur tags and extends be
     // 2.39 merges with guliverkli2 fork
 #ifdef _VSMOD
-    "VSFilterMod/TextSub (guliverkli2)", // longname
+    "VSFilterMod/TextSub " VSFM_VERSION " (cross-platform)", // longname
 #else
     "VSFilter/TextSub (guliverkli2)", // longname
 #endif

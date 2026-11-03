@@ -6,6 +6,13 @@
 #include "font_engine.h"
 #include "font_provider.h"
 #include "../compat/cstring_compat.h"
+#include "../compat/text_compat.h"
+#include "../compat/det_math.h"
+
+#if !defined(_WIN32)
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -13,6 +20,9 @@
 #include FT_BBOX_H
 #include FT_SYNTHESIS_H
 #include FT_TRUETYPE_TABLES_H
+#include FT_TRUETYPE_IDS_H
+#include FT_SFNT_NAMES_H
+#include FT_MULTIPLE_MASTERS_H
 
 #include <algorithm>
 #include <functional>
@@ -1095,7 +1105,7 @@ bool FontFace::AppendString(const wchar_t* str, int len, int dx, int dy, GlyphPa
             continue;
         }
 
-        b.penX += (FT_Pos)kern << 6;
+        b.penX += (FT_Pos)kern * 64;
         FT_Pos advance = (FT_Pos)Round26_6(impl->face->glyph->advance.x) << 6;
 
         b.sideways = false;
@@ -1187,10 +1197,30 @@ struct FontEngine::Impl
      * author embedding a font is asking for. */
     struct MemoryFont
     {
-        std::shared_ptr<FontData> data;
+        std::shared_ptr<FontData> data;   // an attachment's bytes, or null
+        std::string path;                 // else the file, loaded on first use
         int faceIndex = 0;
+        int weight = FW_NORMAL;     // OS/2 usWeightClass
+        bool italic = false;
     };
-    std::map<std::wstring, MemoryFont> memoryFonts;
+    /* Every family name of every attached face, lower-cased, in every
+     * language of its name table; several faces share a family. Full names
+     * map to the one face they name. See CollectNames. */
+    std::map<std::wstring, std::vector<MemoryFont> > memoryFamilies;
+    std::map<std::wstring, MemoryFont> memoryFullNames;
+    /* The family keys in the order they were first registered: the order in
+     * which attached and font-directory fonts are tried for glyph fallback. */
+    std::vector<std::wstring> memoryFamilyOrder;
+
+    const MemoryFont* FindMemoryFont(const std::wstring& lowerName, int weight, bool italic) const;
+
+    /* What each requested font resolved to, once per family, weight and
+     * slant; see FontEngine::Resolutions. */
+    std::vector<Resolution> resolutions;
+    std::set<std::wstring> recorded;
+    bool logToStderr = false;
+    void Record(const FontDesc& desc, const std::wstring& family, const char* source,
+                const std::string& path, bool exact);
 
     /* Font files are read into memory once and shared by every size that uses
      * them. Besides saving re-reads, this sidesteps FT_New_Face's use of
@@ -1261,7 +1291,260 @@ FontEngine::~FontEngine() {}
 FontEngine& FontEngine::Get()
 {
     static FontEngine inst;
+    static std::once_flag init;
+    std::call_once(init, [] {
+        const char* log = std::getenv("VSFM_FONT_LOG");
+        inst.m_impl->logToStderr = log && *log && std::strcmp(log, "0") != 0;
+        inst.AddFontDirectoriesFromEnvironment();
+    });
     return inst;
+}
+
+namespace {
+
+/* Appends code point `cp` to `out`, as a surrogate pair where wchar_t is
+ * 16 bits. */
+void AppendCodePoint(std::wstring& out, uint32_t cp)
+{
+    if (sizeof(wchar_t) >= 4 || cp < 0x10000) {
+        out += (wchar_t)cp;
+    } else {
+        cp -= 0x10000;
+        out += (wchar_t)(0xD800 + (cp >> 10));
+        out += (wchar_t)(0xDC00 + (cp & 0x3FF));
+    }
+}
+
+std::wstring DecodeUtf16Be(const FT_Byte* p, FT_UInt len)
+{
+    std::wstring out;
+    for (FT_UInt i = 0; i + 1 < len; i += 2) {
+        uint32_t u = ((uint32_t)p[i] << 8) | p[i + 1];
+        if (u >= 0xD800 && u <= 0xDBFF && i + 3 < len) {
+            const uint32_t lo = ((uint32_t)p[i + 2] << 8) | p[i + 3];
+            if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                u = 0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00);
+                i += 2;
+            }
+        }
+        AppendCodePoint(out, u);
+    }
+    return out;
+}
+
+/* Windows-platform name records in a legacy CJK encoding store each
+ * character as a 16-bit big-endian unit holding one or two bytes of the
+ * code page; old Chinese, Japanese and Korean fonts name themselves this
+ * way, and GDI reads them. */
+std::wstring DecodeLegacyName(const FT_Byte* p, FT_UInt len, UINT codePage)
+{
+    std::string bytes;
+    for (FT_UInt i = 0; i + 1 < len; i += 2) {
+        if (p[i]) bytes += (char)p[i];
+        if (p[i + 1]) bytes += (char)p[i + 1];
+    }
+    if (bytes.empty()) return std::wstring();
+
+    const int n = MultiByteToWideChar(codePage, 0, bytes.data(), (int)bytes.size(), nullptr, 0);
+    if (n <= 0) return std::wstring();
+    std::wstring out((size_t)n, L'\0');
+    MultiByteToWideChar(codePage, 0, bytes.data(), (int)bytes.size(), &out[0], n);
+    return out;
+}
+
+/* A name record as text, or empty if its encoding is not one GDI uses. */
+std::wstring DecodeName(const FT_SfntName& n)
+{
+    if (n.platform_id == TT_PLATFORM_APPLE_UNICODE)
+        return DecodeUtf16Be(n.string, n.string_len);
+
+    if (n.platform_id == TT_PLATFORM_MICROSOFT) {
+        switch (n.encoding_id) {
+        case TT_MS_ID_SYMBOL_CS:
+        case TT_MS_ID_UNICODE_CS:
+        case TT_MS_ID_UCS_4:   return DecodeUtf16Be(n.string, n.string_len);
+        case TT_MS_ID_SJIS:    return DecodeLegacyName(n.string, n.string_len, 932);
+        case TT_MS_ID_PRC:     return DecodeLegacyName(n.string, n.string_len, 936);
+        case TT_MS_ID_BIG_5:   return DecodeLegacyName(n.string, n.string_len, 950);
+        case TT_MS_ID_WANSUNG: return DecodeLegacyName(n.string, n.string_len, 949);
+        default:               return std::wstring();
+        }
+    }
+
+    if (n.platform_id == TT_PLATFORM_MACINTOSH && n.encoding_id == TT_MAC_ID_ROMAN) {
+        std::wstring out;
+        for (FT_UInt i = 0; i < n.string_len; ++i) {
+            if (n.string[i] >= 0x80) return std::wstring();   // not plain ASCII
+            out += (wchar_t)n.string[i];
+        }
+        return out;
+    }
+
+    return std::wstring();
+}
+
+/* The names a face answers to, in every language its name table has.
+ * Family names are what GDI matches a LOGFONT against: the legacy family
+ * (name ID 1), which is the one Windows lists -- "Source Han Sans SC
+ * Medium", "微软雅黑" -- and the typographic family (ID 16), which is what
+ * FreeType reports and what macOS and Linux list. Full names (ID 4) name
+ * one face, as GDI also accepts. */
+void CollectNames(FT_Face face, std::set<std::wstring>* families, std::set<std::wstring>* fullNames)
+{
+    if (face->family_name) {
+        std::wstring ft;
+        for (const char* p = face->family_name; *p; ++p) ft += (wchar_t)(unsigned char)*p;
+        if (!ft.empty()) families->insert(ft);
+    }
+
+    const FT_UInt count = FT_Get_Sfnt_Name_Count(face);
+    for (FT_UInt i = 0; i < count; ++i) {
+        FT_SfntName n;
+        if (FT_Get_Sfnt_Name(face, i, &n) != 0) continue;
+        if (n.name_id != TT_NAME_ID_FONT_FAMILY && n.name_id != TT_NAME_ID_TYPOGRAPHIC_FAMILY
+            && n.name_id != TT_NAME_ID_FULL_NAME)
+            continue;
+
+        std::wstring name = DecodeName(n);
+        while (!name.empty() && name.back() == L'\0') name.pop_back();
+        if (name.empty()) continue;
+
+        if (n.name_id == TT_NAME_ID_FULL_NAME) fullNames->insert(name);
+        else families->insert(name);
+    }
+}
+
+} // namespace
+
+namespace {
+
+/* The weight and slant a face presents: OS/2 usWeightClass, or FreeType's
+ * style flags when that is missing. Caller holds the library lock. */
+void FaceStyle(FT_Face f, int* weight, bool* italic)
+{
+    const TT_OS2* os2 = (const TT_OS2*)FT_Get_Sfnt_Table(f, FT_SFNT_OS2);
+    *weight = (os2 && os2->usWeightClass >= 1 && os2->usWeightClass <= 1000)
+            ? (int)os2->usWeightClass
+            : ((f->style_flags & FT_STYLE_FLAG_BOLD) ? FW_BOLD : FW_NORMAL);
+    *italic = (f->style_flags & FT_STYLE_FLAG_ITALIC) != 0;
+}
+
+/* A variable font's named instance carries the default instance's OS/2
+ * table; its weight is its 'wght' coordinate. */
+int InstanceWeight(FT_Library lib, FT_Face f, int fallback)
+{
+    FT_MM_Var* mm = nullptr;
+    if (FT_Get_MM_Var(f, &mm) != 0 || !mm) return fallback;
+
+    int weight = fallback;
+    std::vector<FT_Fixed> coords(mm->num_axis);
+    if (mm->num_axis && FT_Get_Var_Design_Coordinates(f, mm->num_axis, coords.data()) == 0) {
+        for (FT_UInt a = 0; a < mm->num_axis; ++a)
+            if (mm->axis[a].tag == FT_MAKE_TAG('w', 'g', 'h', 't'))
+                weight = (int)((coords[a] + 0x8000) >> 16);
+    }
+#if FREETYPE_MAJOR > 2 || (FREETYPE_MAJOR == 2 && FREETYPE_MINOR >= 9)
+    FT_Done_MM_Var(lib, mm);
+#else
+    (void)lib;
+    std::free(mm);
+#endif
+    return weight;
+}
+
+std::wstring Widen(const char* s)
+{
+    std::wstring out;
+    if (s) for (; *s; ++s) out += (wchar_t)(unsigned char)*s;
+    return out;
+}
+
+bool IsRibbiStyle(const std::wstring& style)
+{
+    std::wstring s;
+    for (wchar_t c : style) s += (wchar_t)std::towlower((wint_t)c);
+    return s == L"regular" || s == L"bold" || s == L"italic" || s == L"bold italic";
+}
+
+} // namespace
+
+int FontEngine::RegisterFaces(const unsigned char* bytes, size_t len,
+                              const std::shared_ptr<FontData>& keep,
+                              const std::string& path)
+{
+    struct Entry
+    {
+        Impl::MemoryFont font;
+        std::set<std::wstring> families, fullNames;
+    };
+    std::vector<Entry> entries;
+
+    {
+        std::lock_guard<std::mutex> g(Library::Get().lock);
+        FT_Library lib = Library::Get().ft;
+
+        /* Every face in the blob -- a .ttc carries several -- and every named
+         * instance of a variable one. */
+        long faceCount = 1;
+        for (long i = 0; i < faceCount; ++i) {
+            FT_Face probe = nullptr;
+            if (FT_New_Memory_Face(lib, bytes, (FT_Long)len, i, &probe) != 0) break;
+            if (i == 0) faceCount = probe->num_faces > 0 ? probe->num_faces : 1;
+
+            Entry base;
+            base.font.data = keep;
+            base.font.path = path;
+            base.font.faceIndex = (int)i;
+            CollectNames(probe, &base.families, &base.fullNames);
+            FaceStyle(probe, &base.font.weight, &base.font.italic);
+            const long instances = (probe->face_flags & FT_FACE_FLAG_MULTIPLE_MASTERS)
+                                 ? (probe->style_flags >> 16) : 0;
+            const std::wstring family = Widen(probe->family_name);
+            FT_Done_Face(probe);
+
+            if (base.families.empty() && base.fullNames.empty()) continue;
+            entries.push_back(base);
+
+            /* GDI lists a variable font's named instances as fonts of their
+             * own: Regular, Bold, Italic and Bold Italic under the family,
+             * any other ("Light", "Black") as the family "<family> <style>",
+             * as a static font family of that many weights would be. */
+            for (long n = 1; n <= instances && !family.empty(); ++n) {
+                FT_Face inst = nullptr;
+                const long index = (n << 16) | i;
+                if (FT_New_Memory_Face(lib, bytes, (FT_Long)len, index, &inst) != 0) continue;
+
+                Entry e;
+                e.font = base.font;
+                e.font.faceIndex = (int)index;
+                e.font.italic = (inst->style_flags & FT_STYLE_FLAG_ITALIC) != 0;
+                e.font.weight = InstanceWeight(lib, inst, base.font.weight);
+                const std::wstring style = Widen(inst->style_name);
+                FT_Done_Face(inst);
+
+                e.families = base.families;
+                if (!style.empty()) {
+                    e.fullNames.insert(family + L" " + style);
+                    if (!IsRibbiStyle(style)) e.families = { family + L" " + style };
+                }
+                entries.push_back(e);
+            }
+        }
+    }
+
+    std::lock_guard<std::mutex> g(m_impl->lock);
+    for (const Entry& e : entries) {
+        for (const std::wstring& name : e.families) {
+            const std::wstring key = ToLower(name);
+            std::vector<Impl::MemoryFont>& faces = m_impl->memoryFamilies[key];
+            if (faces.empty()) m_impl->memoryFamilyOrder.push_back(key);
+            faces.push_back(e.font);
+            FontProvider::Get().AddMemoryFamily(name);
+        }
+        for (const std::wstring& name : e.fullNames)
+            m_impl->memoryFullNames.emplace(ToLower(name), e.font);   // first face wins
+    }
+    return (int)entries.size();
 }
 
 bool FontEngine::AddMemoryFont(const void* data, size_t len)
@@ -1270,44 +1553,169 @@ bool FontEngine::AddMemoryFont(const void* data, size_t len)
 
     auto fd = std::make_shared<FontData>();
     fd->bytes.assign((const unsigned char*)data, (const unsigned char*)data + len);
+    return RegisterFaces(fd->bytes.data(), fd->bytes.size(), fd, std::string()) > 0;
+}
 
-    /* Register every face in the blob: a .ttc attachment carries several. */
-    bool added = false;
-    long faceCount = 1;
+namespace {
 
-    for (long i = 0; i < faceCount; ++i) {
-        FT_Face probe = nullptr;
-        {
-            std::lock_guard<std::mutex> g(Library::Get().lock);
-            if (FT_New_Memory_Face(Library::Get().ft, fd->bytes.data(),
-                                   (FT_Long)fd->bytes.size(), i, &probe) != 0)
-                break;
+bool HasFontExtension(const std::string& name)
+{
+    const size_t dot = name.rfind('.');
+    if (dot == std::string::npos) return false;
+    std::string ext = name.substr(dot + 1);
+    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+    return ext == "ttf" || ext == "otf" || ext == "ttc" || ext == "otc";
+}
+
+/* Font files under `dir` (UTF-8), recursively, in a stable order. */
+void ListFontFiles(const std::string& dir, int depth, std::vector<std::string>* out)
+{
+    if (depth > 8) return;
+
+    std::vector<std::string> files, subdirs;
+#if defined(_WIN32)
+    const std::wstring pattern = vsfm::U82W(dir.c_str(), dir.size()) + L"\\*";
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(pattern.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        const std::wstring wname = fd.cFileName;
+        if (wname == L"." || wname == L"..") continue;
+        const std::string name = vsfm::W2U8(wname.c_str(), wname.size());
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) subdirs.push_back(dir + "\\" + name);
+        else if (HasFontExtension(name)) files.push_back(dir + "\\" + name);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+#else
+    DIR* d = opendir(dir.c_str());
+    if (!d) return;
+    while (struct dirent* e = readdir(d)) {
+        const std::string name = e->d_name;
+        if (name == "." || name == "..") continue;
+        const std::string full = dir + "/" + name;
+        struct stat st;
+        if (stat(full.c_str(), &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) subdirs.push_back(full);
+        else if (S_ISREG(st.st_mode) && HasFontExtension(name)) files.push_back(full);
+    }
+    closedir(d);
+#endif
+
+    std::sort(files.begin(), files.end());
+    std::sort(subdirs.begin(), subdirs.end());
+    out->insert(out->end(), files.begin(), files.end());
+    for (const std::string& sub : subdirs) ListFontFiles(sub, depth + 1, out);
+}
+
+bool ReadWholeFile(const std::string& path, std::vector<unsigned char>* bytes)
+{
+#if defined(_WIN32)
+    const std::wstring wide = vsfm::U82W(path.c_str(), path.size());
+    FILE* fp = _wfopen(wide.c_str(), L"rb");
+#else
+    FILE* fp = std::fopen(path.c_str(), "rb");
+#endif
+    if (!fp) return false;
+    std::fseek(fp, 0, SEEK_END);
+    const long size = std::ftell(fp);
+    std::fseek(fp, 0, SEEK_SET);
+    bool ok = size > 0;
+    if (ok) {
+        bytes->resize((size_t)size);
+        ok = std::fread(bytes->data(), 1, (size_t)size, fp) == (size_t)size;
+    }
+    std::fclose(fp);
+    return ok;
+}
+
+} // namespace
+
+int FontEngine::AddFontDirectory(const std::string& dir)
+{
+    std::vector<std::string> files;
+    ListFontFiles(dir, 0, &files);
+
+    /* Each file is read once to learn its names and then let go; its bytes
+     * are loaded again only if a script uses it. */
+    int added = 0;
+    for (const std::string& path : files) {
+        std::vector<unsigned char> bytes;
+        if (ReadWholeFile(path, &bytes))
+            added += RegisterFaces(bytes.data(), bytes.size(), nullptr, path);
+    }
+    return added;
+}
+
+void FontEngine::AddFontDirectoriesFromEnvironment()
+{
+    const char* env = std::getenv("VSFM_FONT_DIRS");
+    if (!env || !*env) return;
+
+#if defined(_WIN32)
+    const char sep = ';';
+#else
+    const char sep = ':';
+#endif
+    std::string list = env;
+    size_t start = 0;
+    while (start <= list.size()) {
+        size_t end = list.find(sep, start);
+        if (end == std::string::npos) end = list.size();
+        if (end > start) AddFontDirectory(list.substr(start, end - start));
+        start = end + 1;
+    }
+}
+
+std::vector<FontEngine::Resolution> FontEngine::Resolutions() const
+{
+    std::lock_guard<std::mutex> g(m_impl->lock);
+    return m_impl->resolutions;
+}
+
+void FontEngine::Impl::Record(const FontDesc& desc, const std::wstring& family,
+                              const char* source, const std::string& path, bool exact)
+{
+    const std::wstring key = ToLower(family) + L"|" + std::to_wstring(desc.weight)
+                           + (desc.italic ? L"|i" : L"|r");
+    if (!recorded.insert(key).second) return;
+
+    Resolution r;
+    r.requested = desc.faceName;
+    r.weight = desc.weight;
+    r.italic = desc.italic;
+    r.source = source;
+    r.path = path;
+    r.exact = exact;
+    resolutions.push_back(r);
+
+    if (logToStderr) {
+        const std::string name = vsfm::W2U8(r.requested.c_str(), r.requested.size());
+        std::fprintf(stderr, "vsfiltermod: font \"%s\" %d%s -> %s%s%s%s\n",
+                     name.c_str(), r.weight, r.italic ? " italic" : "", r.source.c_str(),
+                     r.path.empty() ? "" : " ", r.path.c_str(),
+                     r.exact ? "" : " (substituted: not installed)");
+    }
+}
+
+const FontEngine::Impl::MemoryFont* FontEngine::Impl::FindMemoryFont(
+    const std::wstring& lowerName, int weight, bool italic) const
+{
+    /* By family, the face GDI's mapper would pick: the right slant first,
+     * then the nearest weight; the face found first wins a tie. Whatever
+     * the chosen face lacks is synthesized in Build. */
+    auto fam = memoryFamilies.find(lowerName);
+    if (fam != memoryFamilies.end()) {
+        const MemoryFont* best = nullptr;
+        int bestScore = 0;
+        for (const MemoryFont& f : fam->second) {
+            const int score = (f.italic != italic ? 10000 : 0) + std::abs(f.weight - weight);
+            if (!best || score < bestScore) { best = &f; bestScore = score; }
         }
-
-        if (i == 0) faceCount = probe->num_faces > 0 ? probe->num_faces : 1;
-
-        std::wstring family;
-        if (probe->family_name)
-            for (const char* p = probe->family_name; *p; ++p)
-                family += (wchar_t)(unsigned char)*p;
-
-        {
-            std::lock_guard<std::mutex> g(Library::Get().lock);
-            FT_Done_Face(probe);
-        }
-
-        if (family.empty()) continue;
-
-        std::lock_guard<std::mutex> g(m_impl->lock);
-        Impl::MemoryFont mf;
-        mf.data = fd;
-        mf.faceIndex = (int)i;
-        m_impl->memoryFonts[ToLower(family)] = mf;
-        FontProvider::Get().AddMemoryFamily(family);
-        added = true;
+        return best;
     }
 
-    return added;
+    auto full = memoryFullNames.find(lowerName);
+    return full != memoryFullNames.end() ? &full->second : nullptr;
 }
 
 std::wstring FontEngine::ToLower(const std::wstring& s)
@@ -1321,7 +1729,9 @@ std::wstring FontEngine::ToLower(const std::wstring& s)
 void FontEngine::ClearMemoryFonts()
 {
     std::lock_guard<std::mutex> g(m_impl->lock);
-    m_impl->memoryFonts.clear();
+    m_impl->memoryFamilies.clear();
+    m_impl->memoryFullNames.clear();
+    m_impl->memoryFamilyOrder.clear();
 }
 
 std::shared_ptr<FontFace> FontEngine::OpenFont(const FontDesc& desc)
@@ -1359,19 +1769,26 @@ std::shared_ptr<FontFace> FontEngine::OpenFontImpl(const FontDesc& desc, bool ex
     if (vertical) family.erase(0, 1);
 
     /* Script-embedded fonts take priority over anything installed. */
-    auto mem = m_impl->memoryFonts.find(ToLower(family));
-    if (mem != m_impl->memoryFonts.end()) {
-        blob = mem->second.data;
-        match.faceIndex = mem->second.faceIndex;
+    const Impl::MemoryFont* mem = m_impl->FindMemoryFont(ToLower(family), desc.weight, desc.italic);
+    if (mem) {
+        blob = mem->data ? mem->data : m_impl->LoadBlob(mem->path, mem->faceIndex);
+        match.faceIndex = mem->faceIndex;
         match.exactFamily = true;
         /* Whether bold/italic must be faked depends on what the attachment
          * already is; decided in Build, once the face is open. */
         fromMemory = true;
+        if (!exactOnly)
+            m_impl->Record(desc, family, mem->data ? "attached" : "font directory",
+                           mem->path, true);
     } else {
         if (!FontProvider::Get().Match(family, desc.weight, desc.italic,
-                                       desc.charSet, &match))
+                                       desc.charSet, &match)) {
+            if (!exactOnly) m_impl->Record(desc, family, "missing", std::string(), false);
             return nullptr;
+        }
         if (exactOnly && !match.exactFamily) return nullptr;
+        if (!exactOnly)
+            m_impl->Record(desc, family, "installed", match.path, match.exactFamily);
         blob = m_impl->LoadBlob(match.path, match.faceIndex);
     }
 
@@ -1417,8 +1834,8 @@ std::shared_ptr<FontFace> FontEngine::Build(const FontDesc& desc, FontMatch matc
         case 2700: impl->rotCos = 0.0;  impl->rotSin = -1.0; break;
         default: {
             const double rad = tenths * 3.14159265358979323846 / 1800.0;
-            impl->rotCos = std::cos(rad);
-            impl->rotSin = std::sin(rad);
+            impl->rotCos = vsfm::DetCos(rad);
+            impl->rotSin = vsfm::DetSin(rad);
         }
         }
     }
@@ -1667,6 +2084,26 @@ std::shared_ptr<FontFace> FontEngine::FindFallback(const FontDesc& base, int bas
         return f;
     }
 
+    /* Then the fonts the script attached and those from a font directory, in
+     * the order they were registered: a choice that is the same on every
+     * machine, unlike the platform's own fallback below. Sized at the base's
+     * em, as that fallback is. */
+    std::vector<std::wstring> supplied;
+    {
+        std::lock_guard<std::mutex> g(m_impl->lock);
+        supplied = m_impl->memoryFamilyOrder;
+    }
+    for (const std::wstring& family : supplied) {
+        if (family == baseFamily) continue;
+        d.faceName = (vertical ? L"@" : L"") + family;
+        d.height = base.height > 0 ? -baseEm : base.height;
+        std::shared_ptr<FontFace> f = OpenExactFont(d);
+        if (const unsigned gi = covers(f)) {
+            *glyph = gi;
+            return f;
+        }
+    }
+
     /* Last resort: whatever the platform itself would fall back to. */
     FontMatch match;
     if (!FontProvider::Get().MatchCodePoint(cp, base.weight, base.italic, &match))
@@ -1733,15 +2170,17 @@ bool FontEngine::SetupSize(FontFaceImpl* impl, const FontDesc& desc, FontMetrics
         winDescent = 0;
     }
 
-    int emPixels;
+    long long em;
     if (requested > 0) {
         const int cell = winAscent + winDescent;
         if (cell <= 0) return false;
-        emPixels = MulDiv(requested, f->units_per_EM, cell);
+        em = (long long)MulDiv(requested, f->units_per_EM, cell);
     } else {
-        emPixels = -requested;
+        em = -(long long)requested;
     }
-    if (emPixels < 1) emPixels = 1;
+    /* Absurd sizes from a script (\fs99999999) are clamped rather than
+     * overflowing; nothing that large is visible anyway. */
+    const int emPixels = em < 1 ? 1 : (em > 16384 ? 16384 : (int)em);
 
     if (FT_Set_Pixel_Sizes(f, 0, (FT_UInt)emPixels) != 0) return false;
     impl->emSize = emPixels;

@@ -50,14 +50,20 @@ Z 坐标、竖向间距等。
 
 | 平台 | 压缩包 | 内容 |
 | --- | --- | --- |
-| Windows x86_64 | `vsfiltermod-windows-x86_64-msvc` | `vsfiltermod.dll`、`vsfmrender.exe`，单文件即可用，无需额外 DLL |
+| Windows x86_64 | `vsfiltermod-windows-x86_64-msvc` | `vsfiltermod.dll`、`vsfmrender.exe` |
+| Windows x86（32 位） | `vsfiltermod-windows-x86-msvc` | `vsfiltermod.dll`、`vsfmrender.exe`，用于 32 位的 Aegisub、AviSynth+ 和 avs2bdnxml |
+| Windows ARM64 | `vsfiltermod-windows-arm64-msvc` | `vsfiltermod.dll`、`vsfmrender.exe` |
 | Linux x86_64 | `vsfiltermod-linux-x86_64` | `vsfiltermod.so`、`vsfmrender` |
 | Linux aarch64 | `vsfiltermod-linux-aarch64` | `vsfiltermod.so`、`vsfmrender` |
+| macOS 通用 | `vsfiltermod-macos-universal` | `vsfiltermod.dylib`、`vsfmrender`，Apple Silicon 与 Intel 二合一 |
 | macOS Apple Silicon | `vsfiltermod-macos-arm64` | `vsfiltermod.dylib`、`vsfmrender` |
 | macOS Intel | `vsfiltermod-macos-x86_64` | `vsfiltermod.dylib`、`vsfmrender` |
 
-Linux 和 macOS 版本链接系统的 FreeType、libpng，Linux 还需要 fontconfig，
-请用包管理器或 Homebrew 安装。
+所有版本都静态链接了同一固定版本的 FreeType 和 libpng，因此渲染结果完全相同。
+Windows 版本无需额外 DLL。macOS 版本不依赖系统以外的任何库，支持 macOS 11 及以上
+（Apple Silicon）和 10.15 及以上（Intel）。Linux 版本只依赖 fontconfig 和 zlib
+（所有桌面发行版都有），支持 glibc 2.35 及以上（Ubuntu 22.04、Debian 12、Fedora 36
+及更新版本）。每个正式版都附带 `SHA256SUMS` 校验文件。
 
 ## 使用方法
 
@@ -90,8 +96,8 @@ MaskSubMod("subtitle.ass", 1920, 1080, 23.976, 3000)   # RGBA 输出，给 avs2b
 # TextSubMod("subtitle.ass")
 ```
 
-任何通过 AviSynth+ 加载脚本的 64 位 avs2bdnxml 都能使用。
-32 位程序无法加载 64 位插件。
+任何通过 AviSynth+ 加载脚本的 avs2bdnxml 都能使用：32 位的 avs2bdnxml 或
+AviSynth+ 请用 32 位（`windows-x86`）版本，否则用 64 位版本。
 
 ### vsfmrender
 
@@ -109,7 +115,22 @@ vsfmrender --size 1920x1080 --fps 23.976 input.ass output.xml
 | `-t, --title TEXT` | 写入索引的标题 |
 | `--first N` / `--last N` | 导出的帧范围 |
 | `--no-crop` | 输出整帧图片（相当于 avs2bdnxml 的 `-a0`） |
+| `--fontdir DIR` | 优先使用 `DIR`（含子目录）中的字体，先于系统已安装字体；可重复指定 |
+| `--font-report` | 列出字幕用到的每个字体实际解析到了哪个字体文件 |
+| `--strict-fonts` | 只要有字体被替换，就以退出码 3 失败 |
 | `-q, --quiet` | 不显示进度 |
+
+### 让每台机器用上相同的字体
+
+字幕指定的字体如果本机没有安装，就会被平台自动替换——Windows、macOS、Linux
+替换成的字体各不相同。三种方法可以避免：
+
+- **把字体嵌入字幕**（`[Fonts]`，例如 Aegisub 的“附件”功能）。
+- **共享一个字体文件夹。** 其中的字体与内嵌字体一样被查找，并且优先于已安装字体。
+  vsfmrender 用 `--fontdir DIR`；Aegisub 和 AviSynth 则设置环境变量 `VSFM_FONT_DIRS`
+  （多个文件夹在 Windows 上用 `;` 分隔，其他平台用 `:`）。
+- **检查。** vsfmrender 渲染结束后会列出所有被替换的字体，加 `--strict-fonts` 则视为错误。
+  Aegisub 和 AviSynth 中可设置 `VSFM_FONT_LOG=1`，在解析每个字体时打印结果。
 
 ## 编译
 
@@ -138,7 +159,11 @@ Linux 上还需要 fontconfig。Windows 上 FreeType、libpng、zlib 会作为 M
 
 事件时间完全按 `MaskSubMod` 的时钟计算（包括单精度取整），所以 BDN+XML 中每个
 事件的起止帧与原版相同。剩余差异是字形边缘的抗锯齿，在一个像素以内。
-Linux 和 macOS 运行的是同一套代码，那里的差异主要取决于系统安装了哪些字体。
+
+**各平台之间的输出完全相同，而不只是接近。** 只要字体文件相同，Windows、Linux、
+macOS 以及 x86-64 和 ARM 上的每个构建都会输出相同的像素：渲染不存在依赖 SIMD、CPU
+或编译器的代码路径；CI 在每个平台上渲染 `tests/consistency/`，任何像素与共用的
+`expected.txt` 不同都会失败。不同机器之间仍可能不同的，只有安装了哪些字体（见“已知问题”）。
 
 ## 与原版的区别
 
@@ -156,7 +181,12 @@ CoreText 或 fontconfig。
 **合成粗体按 GDI 的规则实现**，逐点测量得出，包括旋转文字时更重的笔画。
 
 **内嵌字体可用**，通过 CSRI 和在所有平台上都可以：附件字体直接交给 FreeType，
-不再安装到系统里。
+不再安装到系统里。GDI 能用哪些名字找到字体，这里就能用哪些名字找到：Windows 家族名
+（如“Source Han Sans SC Medium”）、排版家族名、完整名称，以及任何语言的本地化名称
+（包括老式中日韩字体里用 GBK/Big5/Shift-JIS 编码的名称）。同一家族内嵌了多个字重时，
+会像 GDI 一样按请求的字重和斜体选择对应的字体文件。内嵌可变字体的命名实例也按 GDI
+的方式列出（如“Family Black”）。常规回退字体里都没有的字符，会先在内嵌字体（以及
+`--fontdir` 文件夹）中查找，再交给平台自己的回退机制，因此在每台机器上结果相同。
 
 **去掉了 DirectShow 部分。** DirectShow 滤镜及其属性页、VobSub/DVB/HDMV/CC/USF/
 SSF/RealText 解析器和 DirectX 字幕图层后端都已删除，Aegisub、AviSynth 和 BDN+XML
@@ -175,7 +205,8 @@ SSF/RealText 解析器和 DirectX 字幕图层后端都已删除，Aegisub、Avi
   内部表格决定。
 - 像 `@Arial` 这样 GDI 不认识的字体名，会让 GDI 把整行（包括拉丁字母）换成宋体；
   这里拉丁字母仍使用样式字体。
-- Linux 和 macOS 版本由 CI 编译并做冒烟测试，但尚未与原版逐像素比对。
+- Linux 和 macOS 版本与 Windows 版本逐像素一致（由 CI 检查），但如果字幕指定的字体
+  本机没有安装，各平台会各自替换成不同的字体。把字体嵌入字幕（`[Fonts]`）即可避免。
 
 ## 致谢与许可证
 

@@ -1,0 +1,46 @@
+[Script Info]
+; Cross-platform consistency fixture: text. Uses only the bundled Caladea
+; (embedded by tests/consistency/run.py), and only characters Caladea has, so
+; no platform font lookup or glyph fallback is involved. Every platform must
+; produce exactly the pixels in expected.txt.
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Caladea,48,&H00FFFFFF,&H000000FF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,40,40,30,1
+Style: Box,Caladea,40,&H00E0FFFF,&H000000FF,&H00603000,&H80000000,0,0,0,0,100,100,0,0,3,4,0,8,40,40,30,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:00.40,Default,,0,0,0,,The quick brown fox jumps over the lazy dog
+Dialogue: 0,0:00:00.40,0:00:00.80,Default,,0,0,0,,{\b1}Bold{\b0} {\i1}Italic{\i0} {\b1\i1}Both{\r} {\u1}Under{\u0} {\s1}Strike
+Dialogue: 0,0:00:00.80,0:00:01.20,Default,,0,0,0,,{\1c&H00FF00&\3c&H0000FF&\4c&HFF0000&\bord5\shad4\be2}Outline, shadow, be
+Dialogue: 0,0:00:01.20,0:00:01.60,Default,,0,0,0,,{\blur4\bord3\xshad6\yshad-3}Gaussian blur, offset shadow
+Dialogue: 0,0:00:01.60,0:00:02.00,Default,,0,0,0,,{\fscx135\fscy80\fsp6\fax0.25}Scaled, spaced, sheared
+Dialogue: 0,0:00:02.00,0:00:02.40,Default,,0,0,0,,{\pos(640,360)\org(300,200)\frx30\fry40\frz25}Three-axis rotation
+Dialogue: 0,0:00:02.40,0:00:02.80,Default,,0,0,0,,{\frs20\fsp3}Symbol rotation frs
+Dialogue: 0,0:00:02.80,0:00:03.20,Default,,0,0,0,,{\fsvp20}Vertical spacing\Nsecond line\Nthird line
+Dialogue: 0,0:00:03.20,0:00:03.60,Default,,0,0,0,,{\q0}A long line that has to be wrapped by the renderer because it is far wider than the frame it is drawn into, twice over
+Dialogue: 0,0:00:03.60,0:00:04.40,Default,,0,0,0,,{\move(100,600,1100,200)\t(\frz360\fscx60\1c&H0080FF&)\fad(200,200)}Animated move
+Dialogue: 0,0:00:04.40,0:00:05.20,Default,,0,0,0,,{\k20}Ka{\kf30}ra{\ko20}o{\k10}ke {\kf40}sweep
+Dialogue: 0,0:00:05.20,0:00:05.60,Default,,0,0,0,,{\clip(m 100 400 l 1100 500 900 720 200 700)}Vector clip across the text
+Dialogue: 0,0:00:05.60,0:00:06.00,Default,,0,0,0,,{\iclip(400,600,800,700)}Inverse rectangular clip here
+Dialogue: 0,0:00:06.00,0:00:06.40,Default,,0,0,0,,{\1vc(&H0000FF&,&H00FF00&,&HFF0000&,&HFFFFFF&)\3vc(&H000000&,&H404040&,&H808080&,&HC0C0C0&)\1va(&H00&,&H40&,&H80&,&H00&)}Gradient fill
+Dialogue: 0,0:00:06.40,0:00:06.80,Default,,0,0,0,,{\pos(640,400)\distort(0.1,-0.2,1.1,0.3,0.9,1.2)}Distorted text
+Dialogue: 0,0:00:06.80,0:00:07.20,Default,,0,0,0,,{\rndx6\rndy3\rnds11\bord2}Random point jitter
+Dialogue: 0,0:00:07.20,0:00:07.60,Default,,0,0,0,,{\pos(640,500)\z400\frx35\fry-20}Z coordinate
+Dialogue: 0,0:00:07.60,0:00:08.40,Default,,0,0,0,,{\jitter(6,6,4,4,80,5)}Jittering line
+Dialogue: 0,0:00:08.40,0:00:09.20,Default,,0,0,0,,{\mover(300,300,900,400,0,180,50,200)}Radial move
+Dialogue: 0,0:00:09.20,0:00:10.00,Default,,0,0,0,,{\moves4(100,100,400,700,900,100,1200,600)}Cubic spline move
+Dialogue: 0,0:00:10.00,0:00:10.80,Default,,0,0,0,,{\clip(m 0 0 l 300 0 300 150 0 150)\movevc(200,500,900,550)}Moving vector clip over this line
+Dialogue: 0,0:00:10.80,0:00:11.20,Box,,0,0,0,,Opaque box{\N}border style three
+Dialogue: 0,0:00:10.80,0:00:11.20,Default,,0,0,0,,Two lines at once
+Dialogue: 0,0:00:10.80,0:00:11.20,Default,,0,0,0,,collide and stack
+Dialogue: 0,0:00:11.20,0:00:11.60,Default,,0,0,0,,{\an7\pos(20,20)\fs30}Top left {\an5}\NAlignment 7 then 5 ignored
+Dialogue: 0,0:00:11.60,0:00:12.00,Default,,0,0,0,,{\fnCaladea\fs80\bord0\shad0}Large {\fs20}small {\fs50}mixed
+Dialogue: 0,0:00:12.00,0:00:12.40,Default,,0,0,0,,{\c&H80FF00FF&\3c&HFFFFFFFF&}Alpha byte in a colour tag
+Dialogue: 0,0:00:12.40,0:00:12.80,Default,,0,0,0,,{\fs40.5\bord1.5\blur0.75\fscx99.5\frz-2.25}Fractional values

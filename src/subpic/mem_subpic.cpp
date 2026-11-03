@@ -6,10 +6,9 @@
  *
  *    - no COM, no allocator, no queue: one object per filter instance;
  *    - the 32-bit x86 inline-assembly branches are gone. Upstream's x64 build
- *      used the SSE2 intrinsics branch, which is kept, and which also covers
- *      AArch64 through sse2neon;
- *    - where no SSE2 is available, the YUY2 blend uses a scalar version that
- *      saturates exactly like the SSE2 code. Upstream's own scalar fallback
+ *      used the SSE2 intrinsics branch, which is kept on x86;
+ *    - elsewhere the YUY2 blend uses a scalar version that saturates exactly
+ *      like the SSE2 code (checked over every input). Upstream's own scalar fallback
  *      wrapped with `& 0xff` instead, so it disagreed with its SSE2 path on
  *      the pixels where the sum left 0..255;
  *    - RGB16/15, NV12, P010/P016 and AYUV are not carried over: no AviSynth
@@ -326,10 +325,11 @@ bool MemSubPic::AlphaBlt(SubPicDesc& target) const
                                      | ((unsigned)s2[0] << 8) | s2[1];   // v y2 u y1
 #if defined(VSFM_HAVE_SSE2)
                 if (sse2) {
-                    static const long long k8181 = 0x0080001000800010LL;
                     const unsigned int a4 = (ia << 24) | ((unsigned)s2[7] << 16) | (ia << 8) | s2[3];
                     __m128i mm_zero = _mm_setzero_si128();
-                    __m128i mm_8181 = _mm_move_epi64(_mm_cvtsi64_si128(k8181));
+                    /* 0x0080001000800010 in the low 64 bits. _mm_cvtsi64_si128,
+                     * which upstream used, exists only on x86-64. */
+                    __m128i mm_8181 = _mm_set_epi32(0, 0, 0x00800010, 0x00800010);
                     __m128i mm_c = _mm_unpacklo_epi8(_mm_cvtsi32_si128((int)c), mm_zero);
                     __m128i mm_d = _mm_unpacklo_epi8(_mm_cvtsi32_si128((int)*d2), mm_zero);
                     __m128i mm_a = _mm_unpacklo_epi8(_mm_cvtsi32_si128((int)a4), mm_zero);

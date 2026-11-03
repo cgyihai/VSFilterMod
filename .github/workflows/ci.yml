@@ -11,6 +11,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# FreeType and libpng are built from the pinned subprojects in subprojects/
+# and linked statically on every platform below, so every build uses the same
+# FreeType. Its optional dependencies are off; none affect outlines.
+env:
+  SUBPROJECT_ARGS: >-
+    --force-fallback-for=freetype2,libpng
+    -Dfreetype2:default_library=static
+    -Dlibpng:default_library=static
+    -Dfreetype2:harfbuzz=disabled
+    -Dfreetype2:brotli=disabled
+    -Dfreetype2:bzip2=disabled
+    -Dfreetype2:png=disabled
+    -Dfreetype2:zlib=internal
+    -Dfreetype2:tests=disabled
+
 jobs:
   build:
     name: ${{ matrix.name }}
@@ -24,28 +39,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Built on the oldest supported Ubuntu, so the result runs on any
+          # distribution with glibc 2.35 or later.
           - name: Linux x86_64 (GCC)
-            os: ubuntu-latest
+            os: ubuntu-22.04
             artifact: linux-x86_64
             plugin: build/vsfiltermod.so
             renderer: build/src/bdnxml/vsfmrender
 
           # GitHub's ARM runners are free for public repositories only. If this
-          # repository is private, delete this entry: the label will never match
-          # a runner and the job queues indefinitely instead of failing.
+          # repository is private, delete the ARM entries: their labels never
+          # match a runner and the jobs queue indefinitely instead of failing.
           - name: Linux aarch64 (GCC)
-            os: ubuntu-24.04-arm
+            os: ubuntu-22.04-arm
             artifact: linux-aarch64
             plugin: build/vsfiltermod.so
             renderer: build/src/bdnxml/vsfmrender
-            arm: true
 
           - name: macOS arm64 (Clang)
             os: macos-15
             artifact: macos-arm64
             plugin: build/vsfiltermod.dylib
             renderer: build/src/bdnxml/vsfmrender
-            arm: true
+            macos_target: '11.0'
 
           # macos-13 was retired; macos-15-intel is GitHub's x86_64 image.
           - name: macOS x86_64 (Clang)
@@ -53,23 +69,55 @@ jobs:
             artifact: macos-x86_64
             plugin: build/vsfiltermod.dylib
             renderer: build/src/bdnxml/vsfmrender
+            macos_target: '10.15'
 
           - name: Windows x86_64 (MSVC)
             os: windows-latest
             artifact: windows-x86_64-msvc
             plugin: build/vsfiltermod.dll
             renderer: build/src/bdnxml/vsfmrender.exe
-            windows: true
+            msvc_arch: x64
+
+          # For 32-bit hosts: 32-bit Aegisub, AviSynth+ and avs2bdnxml.
+          - name: Windows x86 (MSVC)
+            os: windows-latest
+            artifact: windows-x86-msvc
+            plugin: build/vsfiltermod.dll
+            renderer: build/src/bdnxml/vsfmrender.exe
+            msvc_arch: x86
+
+          - name: Windows ARM64 (MSVC)
+            os: windows-11-arm
+            artifact: windows-arm64-msvc
+            plugin: build/vsfiltermod.dll
+            renderer: build/src/bdnxml/vsfmrender.exe
+            msvc_arch: arm64
+
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_target }}
 
     steps:
       - uses: actions/checkout@v4
 
+      # Linux uses the system Python: setup-python has no build for every
+      # Ubuntu 22.04 ARM image.
       - uses: actions/setup-python@v5
+        if: runner.os != 'Linux'
         with:
           python-version: '3.12'
+          # The 32-bit build is tested by running 32-bit binaries, which the
+          # 64-bit Python can launch; only the compiler needs to be x86.
+          architecture: ${{ matrix.msvc_arch == 'arm64' && 'arm64' || 'x64' }}
 
       - name: Install Meson and Ninja
+        if: runner.os != 'Linux'
         run: python -m pip install --upgrade meson ninja
+
+      - name: Install Meson and Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m pip install --user --upgrade meson ninja
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -77,68 +125,83 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config \
-            libfreetype-dev \
-            libpng-dev \
+            zlib1g-dev \
             libfontconfig1-dev \
             fonts-liberation \
             fonts-dejavu-core
           # Liberation Sans is metric-compatible with Arial and fontconfig
-          # aliases it, so the fixture's "Arial" resolves to a real face
+          # aliases it, so the smoke test's "Arial" resolves to a real face
           # instead of rendering blank.
           fc-cache -f
           fc-match Arial
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: |
-          brew install pkg-config freetype libpng
-          echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/share/pkgconfig" >> "$GITHUB_ENV"
+        run: brew install pkg-config
 
-      # The SSE2 blend kernels run through sse2neon on AArch64. It is optional
-      # -- without it the scalar kernels are used and output is identical, just
-      # slower -- but the published artefacts should have it.
-      - name: Fetch sse2neon (AArch64)
-        if: matrix.arm
-        run: |
-          mkdir -p thirdparty
-          curl -fsSL --retry 3 -o thirdparty/sse2neon.h \
-            https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h
-          echo "VSFM_EXTRA_ARGS=-Dcpp_args=-I${{ github.workspace }}/thirdparty" >> "$GITHUB_ENV"
+      # Puts the MSVC toolchain for the target architecture on PATH.
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch == 'x64' && 'amd64' || (matrix.msvc_arch == 'x86' && 'amd64_x86' || 'arm64') }}
 
-      - name: Configure (Unix)
-        if: ${{ !matrix.windows }}
-        run: meson setup build ${VSFM_EXTRA_ARGS:-}
+      - name: Configure (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: meson setup build $SUBPROJECT_ARGS
 
-      # freetype, libpng and zlib come from subprojects here, all linked
-      # statically, and b_vscrt pulls in the CRT statically too. The result is
-      # a plugin that is one self-contained file -- which is what you drop into
-      # Aegisub's csri directory -- and an ABI test that needs nothing beside it
-      # on PATH. Nothing crosses the CRT boundary (the CSRI ABI is plain C
-      # types and the PNG I/O is driven by our own callbacks), so a statically
-      # linked CRT inside a host that uses the dynamic one is safe here.
-      # FreeType's optional dependencies are all off; none affect outlines.
+      # zlib comes from a subproject too, and b_vscrt links the CRT in
+      # statically. The result is a plugin that is one self-contained file --
+      # which is what you drop into Aegisub's csri directory. Nothing crosses
+      # the CRT boundary (the CSRI ABI is plain C types and the PNG I/O is
+      # driven by our own callbacks), so a statically linked CRT inside a host
+      # that uses the dynamic one is safe here.
+      #
+      # Every Windows step that may compile or link runs under cmd: in Git
+      # Bash, /usr/bin/link.exe would shadow MSVC's linker.
       - name: Configure (Windows)
-        if: matrix.windows
+        if: runner.os == 'Windows'
+        shell: cmd
+        env:
+          CC: cl
+          CXX: cl
         run: >
-          meson setup build --vsenv
+          meson setup build %SUBPROJECT_ARGS%
           -Db_vscrt=static_from_buildtype
-          -Dfreetype2:default_library=static
-          -Dlibpng:default_library=static
           -Dzlib:default_library=static
-          -Dfreetype2:harfbuzz=disabled
-          -Dfreetype2:brotli=disabled
-          -Dfreetype2:bzip2=disabled
-          -Dfreetype2:png=disabled
-          -Dfreetype2:zlib=internal
-          -Dfreetype2:tests=disabled
 
       - name: Build
+        if: runner.os != 'Windows'
         run: meson compile -C build
 
-      # Loads the plugin the way Aegisub's CSRI loader does -- by path,
-      # resolving each entry point by name -- then renders through it.
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: meson compile -C build
+
+      # csri-abi loads the plugin the way Aegisub's CSRI loader does -- by
+      # path, resolving each entry point by name -- then renders through it.
+      # render-consistency renders tests/consistency/*.ass with the bundled
+      # fonts and requires every event's pixels to match expected.txt, which
+      # is the same file on every platform.
       - name: Test
+        if: runner.os != 'Windows'
         run: meson test -C build --print-errorlogs --suite vsfiltermod
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: meson test -C build --print-errorlogs --suite vsfiltermod
+
+      # Kept even when the test fails, so the platforms' results can be
+      # compared side by side (see the consistency job below).
+      - name: Upload consistency manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consistency-${{ matrix.artifact }}
+          path: build/consistency/manifest.txt
+          if-no-files-found: warn
 
       # Proves the platform's font backend actually resolved a face: the
       # checker fails on a fully transparent image, not merely on a bad exit
@@ -146,9 +209,46 @@ jobs:
       - name: Render and validate BDN+XML
         run: |
           mkdir -p out
+          "${{ matrix.renderer }}" --version
           "${{ matrix.renderer }}" --quiet --size 1280x720 --fps 23.976 \
             tests/smoke.ass out/smoke.xml
-          python tests/check_bdnxml.py --min-events 5 out/smoke.xml
+          # "python" where setup-python provided it; the system's python3 on Linux.
+          PY=python; command -v python >/dev/null 2>&1 || PY=python3
+          "$PY" tests/check_bdnxml.py --min-events 5 out/smoke.xml
+
+      - name: Check the macOS build is self-contained
+        if: runner.os == 'macOS'
+        run: |
+          for f in "${{ matrix.plugin }}" "${{ matrix.renderer }}"; do
+            otool -L "$f"
+            # Line 1 is the file itself; a dylib then lists its own install name.
+            if otool -L "$f" | tail -n +2 | grep -v -F "$(basename "$f")" \
+                | grep -v -E '^[[:space:]]*(/usr/lib/|/System/Library/|@rpath/|@loader_path/|@executable_path/)'; then
+              echo "::error::$f links a library outside the OS"
+              exit 1
+            fi
+            vtool -show-build "$f" | grep -E 'minos|version' || true
+          done
+
+      # The Linux plugin may depend on the C/C++ runtime, zlib and fontconfig,
+      # which every desktop distribution has, and nothing else; the FreeType
+      # and libpng inside it must not be visible to the host.
+      - name: Check the Linux build is self-contained
+        if: runner.os == 'Linux'
+        run: |
+          for f in "${{ matrix.plugin }}" "${{ matrix.renderer }}"; do
+            echo "== $f"
+            readelf -d "$f" | grep NEEDED
+            if readelf -d "$f" | grep NEEDED | grep -v -E '\[(libc|libm|libstdc\+\+|libgcc_s|libz|libfontconfig|libdl|libpthread|ld-linux[^]]*)\.so[^]]*\]'; then
+              echo "::error::$f needs a library outside the allowed set"
+              exit 1
+            fi
+            echo "highest glibc symbol version: $(objdump -T "$f" | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1)"
+          done
+          if nm -D --defined-only "${{ matrix.plugin }}" | grep -E ' (FT_|png_)'; then
+            echo "::error::the plugin exports FreeType or libpng symbols"
+            exit 1
+          fi
 
       - name: Report exported symbols
         run: |
@@ -171,8 +271,43 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # One macOS download for both architectures: the arm64 and x86_64 builds
+  # glued together with lipo. Checked by running the consistency fixtures
+  # through the universal vsfmrender.
+  macos-universal:
+    name: macOS universal
+    needs: build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: vsfiltermod-macos-*
+          path: artifacts
+
+      - name: Merge
+        run: |
+          mkdir -p dist
+          for f in vsfiltermod.dylib vsfmrender; do
+            lipo -create artifacts/vsfiltermod-macos-arm64/$f artifacts/vsfiltermod-macos-x86_64/$f \
+              -output dist/$f
+            chmod +x dist/$f
+            lipo -archs dist/$f
+          done
+          dist/vsfmrender --version
+
+      - name: Check
+        run: python3 tests/consistency/run.py --renderer dist/vsfmrender --out out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsfiltermod-macos-universal
+          path: dist/
+          if-no-files-found: error
+
   # Covers the GCC-on-Windows path and the pkg-config route, which the MSVC
-  # job (all subprojects, static) does not exercise. Its artefact links against
+  # jobs (all subprojects, static) do not exercise. Its artefact links against
   # MSYS2's freetype/libpng/zlib DLLs, so it is a build check rather than
   # something redistributable -- take the MSVC artefact for that.
   mingw:
@@ -206,6 +341,14 @@ jobs:
       - name: Test
         run: meson test -C build --print-errorlogs --suite vsfiltermod
 
+      - name: Upload consistency manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consistency-windows-x86_64-mingw
+          path: build/consistency/manifest.txt
+          if-no-files-found: warn
+
       - name: Render and validate BDN+XML
         run: |
           mkdir -p out
@@ -227,21 +370,108 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # AddressSanitizer and UndefinedBehaviorSanitizer over the test suite, then
+  # the fuzzer (tests/fuzz_render.cpp) over mutants of every test script.
+  sanitizers:
+    name: Sanitizers and fuzzing (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade meson ninja
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfreetype-dev libpng-dev libfontconfig1-dev fonts-dejavu-core
+
+      - name: Configure
+        run: >
+          meson setup build -Dbuildtype=debugoptimized
+          -Db_sanitize=address,undefined -Db_lundef=false
+
+      - name: Build
+        run: meson compile -C build && meson compile -C build fuzz_render
+
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/tests/lsan.supp
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: meson test -C build --print-errorlogs --suite vsfiltermod
+
+      - name: Fuzz
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/tests/lsan.supp
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          mkdir -p fuzz && cd fuzz
+          # A different seed on every run covers new ground over time; it is
+          # printed so a failure can be reproduced.
+          seed=${{ github.run_number }}
+          echo "fuzz seed: $seed"
+          ../build/fuzz_render 3000 "$seed" ../tests/*.ass ../tests/consistency/*.ass
+
+      - name: Upload the failing input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash
+          path: fuzz/fuzz-crash.ass
+          if-no-files-found: ignore
+
+  # Every build job checks its own rendering against expected.txt. This job
+  # puts all of them side by side, so a failure shows at a glance whether one
+  # platform disagrees with the others or all of them disagree with a stale
+  # expected.txt (after an intended rendering change: regenerate it with
+  # tests/consistency/run.py --update).
+  consistency:
+    name: Cross-platform rendering consistency
+    if: always()
+    needs: [build, mingw]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: consistency-*
+          path: manifests
+
+      - name: Compare manifests
+        run: python3 tests/consistency/compare.py tests/consistency/expected.txt manifests/*/manifest.txt
+
   # On a v* tag, publish the redistributable builds as a GitHub Release: one
-  # archive per platform, holding the plugin, vsfmrender and the docs. The
-  # MinGW build links against MSYS2's DLLs and is left out.
+  # archive per platform, holding the plugin, vsfmrender and the docs, plus a
+  # SHA256SUMS file. The MinGW build links against MSYS2's DLLs and is left
+  # out.
   release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, mingw]
+    needs: [build, macos-universal, mingw, sanitizers, consistency]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
 
+      # The version lives in meson.build; a tag that disagrees with it would
+      # publish binaries that report a different version than their name.
+      - name: Check the tag matches the project version
+        run: |
+          version=$(python3 -c "import re; print(re.search(r\"version\s*:\s*'([^']+)'\", open('meson.build').read()).group(1))")
+          echo "meson.build: $version, tag: $GITHUB_REF_NAME"
+          test "$GITHUB_REF_NAME" = "v$version"
+
       - uses: actions/download-artifact@v4
         with:
+          pattern: vsfiltermod-*
           path: artifacts
 
       - name: Package
@@ -251,7 +481,7 @@ jobs:
             name=$(basename "$dir")
             case "$name" in *mingw*) continue ;; esac
             rm -f "$dir/smoke.xml"
-            cp LICENSE README.md README.zh-CN.md "$dir/"
+            cp LICENSE README.md README.zh-CN.md CHANGELOG.md CHANGELOG.zh-CN.md "$dir/"
             chmod +x "$dir"/vsfmrender "$dir"/*.so "$dir"/*.dylib 2>/dev/null || true
             if [[ "$name" == *windows* ]]; then
               (cd "$dir" && zip -9 -r "../../release/$name-${GITHUB_REF_NAME}.zip" .)
@@ -259,7 +489,9 @@ jobs:
               tar -C "$dir" -czf "release/$name-${GITHUB_REF_NAME}.tar.gz" .
             fi
           done
+          (cd release && sha256sum * > SHA256SUMS)
           ls -la release
+          cat release/SHA256SUMS
 
       - uses: softprops/action-gh-release@v2
         with:

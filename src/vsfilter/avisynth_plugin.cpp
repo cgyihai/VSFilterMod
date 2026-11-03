@@ -40,6 +40,7 @@
  */
 
 #include "../compat/vsfm_compat.h"
+#include "vsfm_version.h"
 #include "../subtitles/RTS.h"
 #include "../subpic/mem_subpic.h"
 #include "vfr.h"
@@ -446,7 +447,7 @@ const char* PluginInit(AVS_ScriptEnvironment* env)
     g_avs.add_function(env, "TextSubSwapUV", "b", SwapUV, nullptr);
     g_avs.add_function(env, "MaskSub", maskArgs, MaskSubCreate, (void*)kMaskSub);
 
-    return "VSFilterMod (cross-platform) -- TextSubMod, MaskSubMod";
+    return "VSFilterMod " VSFM_VERSION " (cross-platform) -- TextSubMod, MaskSubMod";
 }
 
 } // namespace

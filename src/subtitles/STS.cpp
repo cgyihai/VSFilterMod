@@ -21,6 +21,7 @@
 
 #include "STS.h"
 #include "../compat/vsfm_compat.h"
+#include "../compat/det_float.h"
 #include "../font/font_engine.h"
 #include <fstream>
 
@@ -31,6 +32,15 @@ const TCHAR* exttypestr[] =
     _T(".ssa"), _T(".ass"), _T(".idx"), _T(".usf"),
     _T(".xss"), _T(".rt")
 };
+
+/* (((h * 60 + m) * 60) + s) * 1000 + ms, wrapping at 32 bits as upstream's
+ * int arithmetic did, rather than overflowing undefinedly on absurd times. */
+static int HmsToMs(int h, int m, int s, int ms)
+{
+    using vsfm::WrapAdd;
+    using vsfm::WrapMul;
+    return WrapAdd(WrapMul(WrapAdd(WrapMul(WrapAdd(WrapMul(h, 60), m), 60), s), 1000), ms);
+}
 
 static long revcolor(long c)
 {
@@ -271,7 +281,7 @@ int FindChar(CStringW str, WCHAR c, int pos, bool fUnicode, int CharSet)
         WCHAR c2 = str[i];
 
         if(IsDBCSLeadByteEx(cp, (BYTE)c2)) i++;
-        else if(i >= pos)
+        else if((ptrdiff_t)i >= pos)   // pos may be negative, as with upstream's int i
         {
             if(c2 == c) return(i);
         }
@@ -532,14 +542,14 @@ static bool OpenSubRipper(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
                     break;
                 }
 
-                str += tmp + '\n';
+                str += tmp + L'\n';   // L'': with a char, 32-bit MSVC finds the call ambiguous
             }
 
             ret.Add(
                 SubRipper2SSA(str, CharSet),
                 file->IsUnicode(),
-                (((hh1 * 60 + mm1) * 60) + ss1) * 1000 + ms1,
-                (((hh2 * 60 + mm2) * 60) + ss2) * 1000 + ms2);
+                HmsToMs(hh1, mm1, ss1, ms1),
+                HmsToMs(hh2, mm2, ss2, ms2));
         }
         else if(c != EOF) // might be another format
         {
@@ -572,8 +582,8 @@ static bool OpenOldSubRipper(CTextFile* file, CSimpleTextSubtitle& ret, int Char
             ret.Add(
                 buff.Mid(buff.Find('}', buff.Find('}') + 1) + 1),
                 file->IsUnicode(),
-                (((hh1 * 60 + mm1) * 60) + ss1) * 1000,
-                (((hh2 * 60 + mm2) * 60) + ss2) * 1000);
+                HmsToMs(hh1, mm1, ss1, 0),
+                HmsToMs(hh2, mm2, ss2, 0));
         }
         else if(c != EOF) // might be another format
         {
@@ -601,7 +611,10 @@ static bool OpenSubViewer(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
             for(size_t i = 0; i < buff.GetLength() && buff[i] == '[';)
             {
                 int j = buff.Find(']', ++i);
-                if(j < i) break;
+                /* Find returns -1 when there is no ']'; upstream's int index
+                 * made that compare below i. Against a size_t it does not,
+                 * and the loop then wrapped i around to 0 forever. */
+                if(j < 0 || (size_t)j < i) break;
 
                 CStringW tag = buff.Mid(i, j - i);
                 tag.Trim();
@@ -620,9 +633,9 @@ static bool OpenSubViewer(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
                 if(tag == L"font")
                     font = def.fontName.CompareNoCase(WToT(param)) ? param : CStringW();
                 else if(tag == L"colf")
-                    color = def.colors[0] != wcstol(((LPCWSTR)param) + 2, 0, 16) ? param : CStringW();
+                    color = def.colors[0] != vsfm::WcsToL(((LPCWSTR)param) + 2, 0, 16) ? param : CStringW();
                 else if(tag == L"size")
-                    size = def.fontSize != wcstol(param, 0, 10) ? param : CStringW();
+                    size = def.fontSize != vsfm::WcsToL(param, 0, 10) ? param : CStringW();
                 else if(tag == L"style")
                 {
                     if(param.Find(L"no") >= 0)
@@ -666,8 +679,8 @@ static bool OpenSubViewer(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
 
             ret.Add(str,
                     file->IsUnicode(),
-                    (((hh1 * 60 + mm1) * 60) + ss1) * 1000 + hs1 * 10,
-                    (((hh2 * 60 + mm2) * 60) + ss2) * 1000 + hs2 * 10);
+                    HmsToMs(hh1, mm1, ss1, vsfm::WrapMul(hs1, 10)),
+                    HmsToMs(hh2, mm2, ss2, vsfm::WrapMul(hs2, 10)));
         }
         else if(c != EOF) // might be another format
         {
@@ -787,9 +800,8 @@ static CStringW MicroDVD2SSA(CStringW str, bool fUnicode, int CharSet)
                     fRestore[FONTSIZE] = (iswupper(code[1]) == 0);
                     code.MakeLower();
 
-                    float size;
-                    swscanf(code, L"{s:%f", &size);
-                    code.Format(L"{\\fs%f}", size);
+                    const float size = vsfm::WcsToF((LPCWSTR)code + 3, NULL);
+                    code = L"{\\fs" + CStringW(vsfm::FormatFloatW(size).c_str()) + L"}";
                     ret += code;
                 }
                 else if(!wcsnicmp(code, L"{h:", 3))
@@ -1045,7 +1057,7 @@ static CStringW SMI2SSA(CStringW str, int CharSet)
                     DWORD val;
                     if(g_colors.Lookup(CString(arg), val))
                         color = (DWORD)val;
-                    else if((color = wcstol(arg, NULL, 16)) == 0)
+                    else if((color = vsfm::WcsToL(arg, NULL, 16)) == 0)
                         color = 0x00ffffff;  // default is white
 
                     arg.Format(L"%02x%02x%02x", color & 0xff, (color >> 8) & 0xff, (color >> 16) & 0xff);
@@ -1090,7 +1102,7 @@ static CStringW SMI2SSA(CStringW str, int CharSet)
                 CString key = WToT(arg);
                 void* val;
                 if(g_colors.Lookup(key, val)) color = (DWORD)val;
-                else color = wcstol(arg, NULL, 16);
+                else color = vsfm::WcsToL(arg, NULL, 16);
 
                 arg.Format(L"%02x%02x%02x", color&0xff, (color>>8)&0xff, (color>>16)&0xff);
             }
@@ -1215,8 +1227,8 @@ static bool OpenVPlayer(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet)
             CStringW str = buff.Mid(buff.Find(':', buff.Find(':', buff.Find(':') + 1) + 1) + 1);
             ret.Add(str,
                     file->IsUnicode(),
-                    (((hh * 60 + mm) * 60) + ss) * 1000,
-                    (((hh * 60 + mm) * 60) + ss) * 1000 + 1000 + 50 * str.GetLength());
+                    HmsToMs(hh, mm, ss, 0),
+                    HmsToMs(hh, mm, ss, 1000) + 50 * str.GetLength());
         }
         else if(c != EOF) // might be another format
         {
@@ -1251,14 +1263,22 @@ int GetInt(CStringW& buff, char sep = ',') //throw(...)
     str = GetStr(buff, sep);
     str.MakeLower();
 
-    CStringW fmtstr = str.GetLength() > 2 && (str.Left(2) == L"&h" || str.Left(2) == L"0x")
-                      ? str = str.Mid(2), L"%x"
-                              : L"%d";
+    int base = 10;
+    if(str.GetLength() > 2 && (str.Left(2) == L"&h" || str.Left(2) == L"0x"))
+    {
+        str = str.Mid(2);
+        base = 16;
+    }
 
-    int ret;
-    if(swscanf(str, fmtstr, &ret) != 1) throw 1;
+    /* Upstream used swscanf's %d / %x, whose result is undefined when the
+     * value does not fit an int -- e.g. a colour written in decimal with an
+     * alpha byte, 4294967295. Here it wraps to 32 bits, on every platform. */
+    const wchar_t* s = str;
+    wchar_t* e = NULL;
+    const long long v = std::wcstoll(s, &e, base);
+    if(e == s) throw 1;
 
-    return(ret);
+    return (int)(uint32_t)(unsigned long long)v;
 }
 
 double GetFloat(CStringW& buff, char sep = ',') //throw(...)
@@ -1268,8 +1288,12 @@ double GetFloat(CStringW& buff, char sep = ',') //throw(...)
     str = GetStr(buff, sep);
     str.MakeLower();
 
-    float ret;
-    if(swscanf(str, L"%f", &ret) != 1) throw 1;
+    /* swscanf's %f, but always with '.' as the decimal point, whatever
+     * locale the host application has set. */
+    const wchar_t* s = str;
+    wchar_t* e = NULL;
+    const float ret = vsfm::WcsToF(s, &e);
+    if(e == s) throw 1;
 
     return((double)ret);
 }
@@ -1468,7 +1492,7 @@ static bool OpenSubStationAlpha(CTextFile* file, CSimpleTextSubtitle& ret, int C
             {
                 ret.m_dstScreenSize.cy = (ret.m_dstScreenSize.cx == 1280)
                                          ? 1024
-                                         : ret.m_dstScreenSize.cx * 3 / 4;
+                                         : vsfm::WrapMul(ret.m_dstScreenSize.cx, 3) / 4;
             }
         }
         else if(entry == L"playresy")
@@ -1487,7 +1511,7 @@ static bool OpenSubStationAlpha(CTextFile* file, CSimpleTextSubtitle& ret, int C
             {
                 ret.m_dstScreenSize.cx = (ret.m_dstScreenSize.cy == 1024)
                                          ? 1280
-                                         : ret.m_dstScreenSize.cy * 4 / 3;
+                                         : vsfm::WrapMul(ret.m_dstScreenSize.cy, 4) / 3;
             }
         }
         else if(entry == L"wrapstyle")
@@ -1704,8 +1728,8 @@ static bool OpenSubStationAlpha(CTextFile* file, CSimpleTextSubtitle& ret, int C
 
                 ret.Add(buff,
                         file->IsUnicode(),
-                        (((hh1 * 60 + mm1) * 60) + ss1) * 1000 + ms1_div10 * 10,
-                        (((hh2 * 60 + mm2) * 60) + ss2) * 1000 + ms2_div10 * 10,
+                        HmsToMs(hh1, mm1, ss1, vsfm::WrapMul(ms1_div10, 10)),
+                        HmsToMs(hh2, mm2, ss2, vsfm::WrapMul(ms2_div10, 10)),
                         Style, Actor, Effect,
                         marginRect,
                         layer);
@@ -1803,7 +1827,7 @@ static bool OpenXombieSub(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
             {
                 ret.m_dstScreenSize.cy = (ret.m_dstScreenSize.cx == 1280)
                                          ? 1024
-                                         : ret.m_dstScreenSize.cx * 3 / 4;
+                                         : vsfm::WrapMul(ret.m_dstScreenSize.cx, 3) / 4;
             }
         }
         else if(entry == L"screenvertical")
@@ -1822,7 +1846,7 @@ static bool OpenXombieSub(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
             {
                 ret.m_dstScreenSize.cx = (ret.m_dstScreenSize.cy == 1024)
                                          ? 1280
-                                         : ret.m_dstScreenSize.cy * 4 / 3;
+                                         : vsfm::WrapMul(ret.m_dstScreenSize.cy, 4) / 3;
             }
         }
         else if(entry == L"style")
@@ -1907,8 +1931,8 @@ static bool OpenXombieSub(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
 
                 ret.Add(buff,
                         file->IsUnicode(),
-                        (((hh1 * 60 + mm1) * 60) + ss1) * 1000 + ms1,
-                        (((hh2 * 60 + mm2) * 60) + ss2) * 1000 + ms2,
+                        HmsToMs(hh1, mm1, ss1, ms1),
+                        HmsToMs(hh2, mm2, ss2, ms2),
                         Style, Actor, _T(""),
                         marginRect,
                         layer);
@@ -2762,28 +2786,26 @@ void CSimpleTextSubtitle::SetStr(int i, CStringW str, bool fUnicode)
     else stse.str = str;
 }
 
-static int comp1(const void* a, const void* b)
-{
-    int ret = ((STSEntry*)a)->start - ((STSEntry*)b)->start;
-    if(ret == 0) ret = ((STSEntry*)a)->layer - ((STSEntry*)b)->layer;
-    if(ret == 0) ret = ((STSEntry*)a)->readorder - ((STSEntry*)b)->readorder;
-    return(ret);
-}
-
-static int comp2(const void* a, const void* b)
-{
-    return(((STSEntry*)a)->readorder - ((STSEntry*)b)->readorder);
-}
-
+/* Upstream sorted with qsort and comparators that subtracted: the
+ * subtraction overflows for extreme values, and qsort is not stable -- glibc
+ * and MSVC order equal entries differently -- so events with equal keys (a
+ * repeated ReadOrder from CSRI data, say) could stack differently on each
+ * platform. A stable sort with plain comparisons gives one order everywhere. */
 void CSimpleTextSubtitle::Sort(bool fRestoreReadorder)
 {
-    qsort(GetData(), GetCount(), sizeof(STSEntry), !fRestoreReadorder ? comp1 : comp2);
+    STSEntry* first = GetData();
+    STSEntry* last = first + GetCount();
+    if(!fRestoreReadorder)
+        std::stable_sort(first, last, [](const STSEntry& a, const STSEntry& b) {
+            if(a.start != b.start) return a.start < b.start;
+            if(a.layer != b.layer) return a.layer < b.layer;
+            return a.readorder < b.readorder;
+        });
+    else
+        std::stable_sort(first, last, [](const STSEntry& a, const STSEntry& b) {
+            return a.readorder < b.readorder;
+        });
     CreateSegments();
-}
-
-static int intcomp(const void* i1, const void* i2)
-{
-    return(*((int*)i1) - *((int*)i2));
 }
 
 void CSimpleTextSubtitle::CreateSegments()
@@ -2801,7 +2823,11 @@ void CSimpleTextSubtitle::CreateSegments()
         breakpoints.Add(stse.end);
     }
 
-    qsort(breakpoints.GetData(), breakpoints.GetCount(), sizeof(int), intcomp);
+    /* std::sort with a real comparison: upstream's qsort comparator returned
+     * i1 - i2, which overflows for extreme times and then orders differently
+     * under each C library's qsort. (qsort was also handed a null pointer
+     * for a script with no events.) */
+    std::sort(breakpoints.GetData(), breakpoints.GetData() + breakpoints.GetCount());
 
     int* ptr = breakpoints.GetData(), prev = ptr ? *ptr : NULL;
 

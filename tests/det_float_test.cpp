@@ -1,0 +1,166 @@
+/*
+ * Checks the deterministic float helpers CWord::Transform is built on.
+ *
+ * RcpIntel must return the same bits on every platform, so it is checked
+ * against fixed values taken from an Intel CPU's RCPSS. On an Intel x86 host
+ * it is additionally compared with the instruction itself over a sweep of
+ * inputs. AMD CPUs implement RCPSS differently, so that comparison is skipped
+ * there -- which is exactly why the renderer no longer uses the instruction.
+ */
+
+#include "compat/det_float.h"
+#include "compat/det_math.h"
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
+#define HOST_X86 1
+#include <xmmintrin.h>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+#include <cpuid.h>
+#endif
+#endif
+
+namespace {
+
+uint32_t Bits(float f) { uint32_t b; std::memcpy(&b, &f, 4); return b; }
+float Float(uint32_t b) { float f; std::memcpy(&f, &b, 4); return f; }
+uint64_t Bits64(double d) { uint64_t b; std::memcpy(&b, &d, 8); return b; }
+
+struct Golden { uint32_t in, out; };
+
+const Golden kGolden[] = {
+    { 0x3f800000u, 0x3f7ff000u },  // 1
+    { 0x3fc00000u, 0x3f2aa000u },  // 1.5
+    { 0x40400000u, 0x3eaaa000u },  // 3
+    { 0x40e00000u, 0x3e124000u },  // 7
+    { 0x42f60000u, 0x3c053000u },  // 123
+    { 0x45800800u, 0x397ff000u },  // 4097
+    { 0x3a83126fu, 0x4479f800u },  // 0.001
+    { 0x3f400000u, 0x3faaa000u },  // 0.75
+    { 0x45fff800u, 0x39000800u },  // 8191
+    { 0x7149f2cau, 0x0da24000u },  // 1e30
+    { 0xc0200000u, 0xbeccc000u },  // -2.5
+    { 0x00000000u, 0x7f800000u },  // 0 -> inf
+    { 0x80000000u, 0xff800000u },  // -0 -> -inf
+    { 0x00000001u, 0x7f800000u },  // denormal -> inf
+    { 0x7f800000u, 0x00000000u },  // inf -> 0
+    { 0x7f7fffffu, 0x00000000u },  // FLT_MAX -> flushed to 0
+};
+
+#ifdef HOST_X86
+bool IsIntel()
+{
+    unsigned int regs[4] = {0, 0, 0, 0};
+#if defined(_MSC_VER)
+    int r[4];
+    __cpuid(r, 0);
+    std::memcpy(regs, r, sizeof(regs));
+#else
+    __get_cpuid(0, &regs[0], &regs[1], &regs[2], &regs[3]);
+#endif
+    char vendor[13];
+    std::memcpy(vendor + 0, &regs[1], 4);   // EBX
+    std::memcpy(vendor + 4, &regs[3], 4);   // EDX
+    std::memcpy(vendor + 8, &regs[2], 4);   // ECX
+    vendor[12] = 0;
+    return std::strcmp(vendor, "GenuineIntel") == 0;
+}
+#endif
+
+} // namespace
+
+int main()
+{
+    int failures = 0;
+
+    for (const Golden& g : kGolden) {
+        const uint32_t got = Bits(vsfm::RcpIntel(Float(g.in)));
+        if (got != g.out) {
+            std::printf("RcpIntel(%08x) = %08x, expected %08x\n", g.in, got, g.out);
+            ++failures;
+        }
+    }
+
+    struct { float in; int32_t out; } cvt[] = {
+        { 1.9f, 1 }, { -1.9f, -1 }, { 2147483520.0f, 2147483520 },
+        { 2147483648.0f, INT32_MIN }, { -2147483648.0f, INT32_MIN },
+        { -3e9f, INT32_MIN }, { Float(0x7fc00000u), INT32_MIN },
+    };
+    for (const auto& c : cvt) {
+        if (vsfm::CvtTruncSs(c.in) != c.out) {
+            std::printf("CvtTruncSs(%g) = %d, expected %d\n",
+                        c.in, vsfm::CvtTruncSs(c.in), c.out);
+            ++failures;
+        }
+    }
+
+    /* DetSin & co. must give these bits everywhere (see det_math.h). */
+    struct { double x; uint64_t sin, cos; } trig[] = {
+        { 0x1p-1, 0x3fdeaee8744b05f0ull, 0x3fec1528065b7d50ull },
+        { 0x1p+1, 0x3fed18f6ead1b446ull, 0xbfdaa22657537205ull },
+        { 0x1.0c1205bc01a37p-1, 0x3fdfffa9a336407eull, 0x3febb693d66d5508ull },
+        { -0x1.d333333333333p+2, 0xbfeb36c6dc1d7445ull, 0x3fe0d5a0848a01cbull },
+        { 0x1.34a456d5cfaadp+10, 0x3fb3fa00084ee3ddull, 0xbfefe7053dc31387ull },
+        { 0x1.e848p+19, 0xbfd6664b2568d867ull, 0x3fedf9df9906d32cull },
+    };
+    for (const auto& t : trig) {
+        if (Bits64(vsfm::DetSin(t.x)) != t.sin || Bits64(vsfm::DetCos(t.x)) != t.cos) {
+            std::printf("DetSin/DetCos(%a) differ from the reference\n", t.x);
+            ++failures;
+        }
+    }
+    struct { double x; uint64_t r; } exps[] = {
+        { -0x1p-1, 0x3fe368b2fc6f960aull }, { -0x1.88p+3, 0x3ed411fb0da07714ull },
+        { 0x1.8p+1, 0x403415e5bf6fb106ull }, { -0x1.5ep+9, 0x00d14f2b0fb9307full },
+    }, logs[] = {
+        { 0x1.3333333333333p-2, 0xbff34378fcbda721ull },
+        { 0x1.000001ad7f29bp+0, 0x3e7ad7f2847b6492ull },
+        { 0x1.81c8p+13, 0x4022d78e26ae18e8ull },
+    };
+    for (const auto& e : exps)
+        if (Bits64(vsfm::DetExp(e.x)) != e.r) { std::printf("DetExp(%a) differs\n", e.x); ++failures; }
+    for (const auto& l : logs)
+        if (Bits64(vsfm::DetLog(l.x)) != l.r) { std::printf("DetLog(%a) differs\n", l.x); ++failures; }
+    if (Bits64(vsfm::DetPow(0.37, 2.5)) != 0x3fb551616d6a40d3ull) {
+        std::printf("DetPow(0.37, 2.5) differs\n");
+        ++failures;
+    }
+
+    if (vsfm::MaxSs(Float(0x7fc00000u), 1000.0f) != 1000.0f ||
+        vsfm::MinSs(1.0f, 1.0f) != 1.0f) {
+        std::printf("MinSs / MaxSs do not follow MINSS / MAXSS\n");
+        ++failures;
+    }
+
+#ifdef HOST_X86
+    if (IsIntel()) {
+        long checked = 0, bad = 0;
+        for (uint64_t b = 0; b <= 0xFFFFFFFFull; b += 4093) {
+            const float x = Float((uint32_t)b);
+            if (x != x) continue;   // NaN payload handling is not needed here
+            const uint32_t hw = Bits(_mm_cvtss_f32(_mm_rcp_ss(_mm_set_ss(x))));
+            const uint32_t em = Bits(vsfm::RcpIntel(x));
+            ++checked;
+            if (hw != em) {
+                if (bad < 5)
+                    std::printf("RCPSS(%08x): hardware %08x, RcpIntel %08x\n",
+                                (uint32_t)b, hw, em);
+                ++bad;
+            }
+        }
+        std::printf("compared %ld inputs with this Intel CPU's RCPSS: %ld differ\n",
+                    checked, bad);
+        failures += bad != 0;
+    } else {
+        std::printf("not an Intel CPU: hardware comparison skipped\n");
+    }
+#endif
+
+    std::printf(failures ? "FAILED\n" : "ok\n");
+    return failures ? 1 : 0;
+}

@@ -130,7 +130,10 @@
 #  endif
 #endif
 
-#if defined(MSVC) && !defined(AVS_WINDOWS_X86)
+/* VSFilterMod: upstream rejects MSVC on Windows ARM because AviSynth+ itself
+ * is built there with clang-cl. This plugin uses only the C API, which is
+ * plain C and compiles with MSVC on ARM64 as well, so ARM is allowed here. */
+#if defined(MSVC) && !defined(AVS_WINDOWS_X86) && !defined(AVS_WINDOWS_ARM)
 #    error Unsupported combination of compiler, operating system, and machine architecture.
 #endif
 
