@@ -172,7 +172,12 @@ Sizing, baseline and the kerning GDI applies to such runs follow GDI.
 heavier strokes it uses for rotated text.
 
 **Embedded fonts work** through CSRI and on every platform: attachments go to
-FreeType instead of being installed into the OS.
+FreeType instead of being installed into the OS. They are found by every name
+GDI would find them by — the Windows family name ("Source Han Sans SC
+Medium"), the typographic family, the full name, and the localized names of
+any language, including GBK/Big5/Shift-JIS-encoded names in older CJK fonts —
+and when several attached faces share a family, the one matching the
+requested weight and slant is used, as GDI picks it.
 
 **DirectShow is gone.** The DirectShow filter, its property pages, the
 VobSub/DVB/HDMV/CC/USF/SSF/RealText parsers and the DirectX subpicture

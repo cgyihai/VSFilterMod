@@ -6,6 +6,7 @@
 #include "font_engine.h"
 #include "font_provider.h"
 #include "../compat/cstring_compat.h"
+#include "../compat/text_compat.h"
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -13,6 +14,8 @@
 #include FT_BBOX_H
 #include FT_SYNTHESIS_H
 #include FT_TRUETYPE_TABLES_H
+#include FT_TRUETYPE_IDS_H
+#include FT_SFNT_NAMES_H
 
 #include <algorithm>
 #include <functional>
@@ -1189,8 +1192,16 @@ struct FontEngine::Impl
     {
         std::shared_ptr<FontData> data;
         int faceIndex = 0;
+        int weight = FW_NORMAL;     // OS/2 usWeightClass
+        bool italic = false;
     };
-    std::map<std::wstring, MemoryFont> memoryFonts;
+    /* Every family name of every attached face, lower-cased, in every
+     * language of its name table; several faces share a family. Full names
+     * map to the one face they name. See CollectNames. */
+    std::map<std::wstring, std::vector<MemoryFont> > memoryFamilies;
+    std::map<std::wstring, MemoryFont> memoryFullNames;
+
+    const MemoryFont* FindMemoryFont(const std::wstring& lowerName, int weight, bool italic) const;
 
     /* Font files are read into memory once and shared by every size that uses
      * them. Besides saving re-reads, this sidesteps FT_New_Face's use of
@@ -1264,6 +1275,122 @@ FontEngine& FontEngine::Get()
     return inst;
 }
 
+namespace {
+
+/* Appends code point `cp` to `out`, as a surrogate pair where wchar_t is
+ * 16 bits. */
+void AppendCodePoint(std::wstring& out, uint32_t cp)
+{
+    if (sizeof(wchar_t) >= 4 || cp < 0x10000) {
+        out += (wchar_t)cp;
+    } else {
+        cp -= 0x10000;
+        out += (wchar_t)(0xD800 + (cp >> 10));
+        out += (wchar_t)(0xDC00 + (cp & 0x3FF));
+    }
+}
+
+std::wstring DecodeUtf16Be(const FT_Byte* p, FT_UInt len)
+{
+    std::wstring out;
+    for (FT_UInt i = 0; i + 1 < len; i += 2) {
+        uint32_t u = ((uint32_t)p[i] << 8) | p[i + 1];
+        if (u >= 0xD800 && u <= 0xDBFF && i + 3 < len) {
+            const uint32_t lo = ((uint32_t)p[i + 2] << 8) | p[i + 3];
+            if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                u = 0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00);
+                i += 2;
+            }
+        }
+        AppendCodePoint(out, u);
+    }
+    return out;
+}
+
+/* Windows-platform name records in a legacy CJK encoding store each
+ * character as a 16-bit big-endian unit holding one or two bytes of the
+ * code page; old Chinese, Japanese and Korean fonts name themselves this
+ * way, and GDI reads them. */
+std::wstring DecodeLegacyName(const FT_Byte* p, FT_UInt len, UINT codePage)
+{
+    std::string bytes;
+    for (FT_UInt i = 0; i + 1 < len; i += 2) {
+        if (p[i]) bytes += (char)p[i];
+        if (p[i + 1]) bytes += (char)p[i + 1];
+    }
+    if (bytes.empty()) return std::wstring();
+
+    const int n = MultiByteToWideChar(codePage, 0, bytes.data(), (int)bytes.size(), nullptr, 0);
+    if (n <= 0) return std::wstring();
+    std::wstring out((size_t)n, L'\0');
+    MultiByteToWideChar(codePage, 0, bytes.data(), (int)bytes.size(), &out[0], n);
+    return out;
+}
+
+/* A name record as text, or empty if its encoding is not one GDI uses. */
+std::wstring DecodeName(const FT_SfntName& n)
+{
+    if (n.platform_id == TT_PLATFORM_APPLE_UNICODE)
+        return DecodeUtf16Be(n.string, n.string_len);
+
+    if (n.platform_id == TT_PLATFORM_MICROSOFT) {
+        switch (n.encoding_id) {
+        case TT_MS_ID_SYMBOL_CS:
+        case TT_MS_ID_UNICODE_CS:
+        case TT_MS_ID_UCS_4:   return DecodeUtf16Be(n.string, n.string_len);
+        case TT_MS_ID_SJIS:    return DecodeLegacyName(n.string, n.string_len, 932);
+        case TT_MS_ID_PRC:     return DecodeLegacyName(n.string, n.string_len, 936);
+        case TT_MS_ID_BIG_5:   return DecodeLegacyName(n.string, n.string_len, 950);
+        case TT_MS_ID_WANSUNG: return DecodeLegacyName(n.string, n.string_len, 949);
+        default:               return std::wstring();
+        }
+    }
+
+    if (n.platform_id == TT_PLATFORM_MACINTOSH && n.encoding_id == TT_MAC_ID_ROMAN) {
+        std::wstring out;
+        for (FT_UInt i = 0; i < n.string_len; ++i) {
+            if (n.string[i] >= 0x80) return std::wstring();   // not plain ASCII
+            out += (wchar_t)n.string[i];
+        }
+        return out;
+    }
+
+    return std::wstring();
+}
+
+/* The names a face answers to, in every language its name table has.
+ * Family names are what GDI matches a LOGFONT against: the legacy family
+ * (name ID 1), which is the one Windows lists -- "Source Han Sans SC
+ * Medium", "微软雅黑" -- and the typographic family (ID 16), which is what
+ * FreeType reports and what macOS and Linux list. Full names (ID 4) name
+ * one face, as GDI also accepts. */
+void CollectNames(FT_Face face, std::set<std::wstring>* families, std::set<std::wstring>* fullNames)
+{
+    if (face->family_name) {
+        std::wstring ft;
+        for (const char* p = face->family_name; *p; ++p) ft += (wchar_t)(unsigned char)*p;
+        if (!ft.empty()) families->insert(ft);
+    }
+
+    const FT_UInt count = FT_Get_Sfnt_Name_Count(face);
+    for (FT_UInt i = 0; i < count; ++i) {
+        FT_SfntName n;
+        if (FT_Get_Sfnt_Name(face, i, &n) != 0) continue;
+        if (n.name_id != TT_NAME_ID_FONT_FAMILY && n.name_id != TT_NAME_ID_TYPOGRAPHIC_FAMILY
+            && n.name_id != TT_NAME_ID_FULL_NAME)
+            continue;
+
+        std::wstring name = DecodeName(n);
+        while (!name.empty() && name.back() == L'\0') name.pop_back();
+        if (name.empty()) continue;
+
+        if (n.name_id == TT_NAME_ID_FULL_NAME) fullNames->insert(name);
+        else families->insert(name);
+    }
+}
+
+} // namespace
+
 bool FontEngine::AddMemoryFont(const void* data, size_t len)
 {
     if (!data || len == 0) return false;
@@ -1276,38 +1403,65 @@ bool FontEngine::AddMemoryFont(const void* data, size_t len)
     long faceCount = 1;
 
     for (long i = 0; i < faceCount; ++i) {
-        FT_Face probe = nullptr;
-        {
-            std::lock_guard<std::mutex> g(Library::Get().lock);
-            if (FT_New_Memory_Face(Library::Get().ft, fd->bytes.data(),
-                                   (FT_Long)fd->bytes.size(), i, &probe) != 0)
-                break;
-        }
-
-        if (i == 0) faceCount = probe->num_faces > 0 ? probe->num_faces : 1;
-
-        std::wstring family;
-        if (probe->family_name)
-            for (const char* p = probe->family_name; *p; ++p)
-                family += (wchar_t)(unsigned char)*p;
-
-        {
-            std::lock_guard<std::mutex> g(Library::Get().lock);
-            FT_Done_Face(probe);
-        }
-
-        if (family.empty()) continue;
-
-        std::lock_guard<std::mutex> g(m_impl->lock);
+        std::set<std::wstring> families, fullNames;
         Impl::MemoryFont mf;
         mf.data = fd;
         mf.faceIndex = (int)i;
-        m_impl->memoryFonts[ToLower(family)] = mf;
-        FontProvider::Get().AddMemoryFamily(family);
+
+        {
+            std::lock_guard<std::mutex> g(Library::Get().lock);
+            FT_Face probe = nullptr;
+            if (FT_New_Memory_Face(Library::Get().ft, fd->bytes.data(),
+                                   (FT_Long)fd->bytes.size(), i, &probe) != 0)
+                break;
+
+            if (i == 0) faceCount = probe->num_faces > 0 ? probe->num_faces : 1;
+
+            CollectNames(probe, &families, &fullNames);
+
+            const TT_OS2* os2 = (const TT_OS2*)FT_Get_Sfnt_Table(probe, FT_SFNT_OS2);
+            mf.weight = (os2 && os2->usWeightClass >= 1 && os2->usWeightClass <= 1000)
+                      ? (int)os2->usWeightClass
+                      : ((probe->style_flags & FT_STYLE_FLAG_BOLD) ? FW_BOLD : FW_NORMAL);
+            mf.italic = (probe->style_flags & FT_STYLE_FLAG_ITALIC) != 0;
+
+            FT_Done_Face(probe);
+        }
+
+        if (families.empty() && fullNames.empty()) continue;
+
+        std::lock_guard<std::mutex> g(m_impl->lock);
+        for (const std::wstring& name : families) {
+            m_impl->memoryFamilies[ToLower(name)].push_back(mf);
+            FontProvider::Get().AddMemoryFamily(name);
+        }
+        for (const std::wstring& name : fullNames)
+            m_impl->memoryFullNames.emplace(ToLower(name), mf);   // first face wins
         added = true;
     }
 
     return added;
+}
+
+const FontEngine::Impl::MemoryFont* FontEngine::Impl::FindMemoryFont(
+    const std::wstring& lowerName, int weight, bool italic) const
+{
+    /* By family, the face GDI's mapper would pick: the right slant first,
+     * then the nearest weight; the face found first wins a tie. Whatever
+     * the chosen face lacks is synthesized in Build. */
+    auto fam = memoryFamilies.find(lowerName);
+    if (fam != memoryFamilies.end()) {
+        const MemoryFont* best = nullptr;
+        int bestScore = 0;
+        for (const MemoryFont& f : fam->second) {
+            const int score = (f.italic != italic ? 10000 : 0) + std::abs(f.weight - weight);
+            if (!best || score < bestScore) { best = &f; bestScore = score; }
+        }
+        return best;
+    }
+
+    auto full = memoryFullNames.find(lowerName);
+    return full != memoryFullNames.end() ? &full->second : nullptr;
 }
 
 std::wstring FontEngine::ToLower(const std::wstring& s)
@@ -1321,7 +1475,8 @@ std::wstring FontEngine::ToLower(const std::wstring& s)
 void FontEngine::ClearMemoryFonts()
 {
     std::lock_guard<std::mutex> g(m_impl->lock);
-    m_impl->memoryFonts.clear();
+    m_impl->memoryFamilies.clear();
+    m_impl->memoryFullNames.clear();
 }
 
 std::shared_ptr<FontFace> FontEngine::OpenFont(const FontDesc& desc)
@@ -1359,10 +1514,10 @@ std::shared_ptr<FontFace> FontEngine::OpenFontImpl(const FontDesc& desc, bool ex
     if (vertical) family.erase(0, 1);
 
     /* Script-embedded fonts take priority over anything installed. */
-    auto mem = m_impl->memoryFonts.find(ToLower(family));
-    if (mem != m_impl->memoryFonts.end()) {
-        blob = mem->second.data;
-        match.faceIndex = mem->second.faceIndex;
+    const Impl::MemoryFont* mem = m_impl->FindMemoryFont(ToLower(family), desc.weight, desc.italic);
+    if (mem) {
+        blob = mem->data;
+        match.faceIndex = mem->faceIndex;
         match.exactFamily = true;
         /* Whether bold/italic must be faked depends on what the attachment
          * already is; decided in Build, once the face is open. */

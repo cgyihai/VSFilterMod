@@ -6,10 +6,11 @@ for each BDN+XML event, its timing, its placement and a SHA-256 of its
 decoded RGBA pixels. The PNG bytes themselves are not compared: different
 zlib builds compress the same pixels differently.
 
-The bundled Caladea font is embedded into each script as a [Fonts]
-attachment before rendering. Embedded fonts take precedence over installed
-ones, so every platform draws from the very same font file and any
-difference in the result is a difference in the renderer.
+Every font in fonts/ is embedded into each script as a [Fonts] attachment
+before rendering. Embedded fonts take precedence over installed ones, so
+every platform draws from the very same font files and any difference in
+the result is a difference in the renderer. (names.ass relies on this to
+check how attachments are found: see fonts/make_test_fonts.py.)
 
 Every platform must reproduce expected.txt exactly.
 
@@ -33,7 +34,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 from check_bdnxml import read_png  # noqa: E402
 
-FONT = os.path.join(HERE, "Caladea-Regular.ttf")
+FONTS = sorted(glob.glob(os.path.join(HERE, "fonts", "*.ttf")))
 EXPECTED = os.path.join(HERE, "expected.txt")
 SIZE = "1280x720"
 FPS = "25"
@@ -57,12 +58,17 @@ def ssa_encode_font(data):
 def embed_font(script_path, out_path):
     with open(script_path, "r", encoding="utf-8-sig") as fh:
         script = fh.read().replace("\r\n", "\n").rstrip("\n")
-    with open(FONT, "rb") as fh:
-        font = fh.read()
-    lines = [script, "", "[Fonts]", "fontname: Caladea-Regular_0.ttf"]
-    lines += ssa_encode_font(font)
+    lines = [script, "", "[Fonts]"]
+    for path in FONTS:
+        with open(path, "rb") as fh:
+            font = fh.read()
+        stem = os.path.splitext(os.path.basename(path))[0]
+        lines.append("fontname: %s_0.ttf" % stem)
+        lines += ssa_encode_font(font)
     lines.append("")
-    with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
+    # With a BOM, as Aegisub writes scripts: without one the parser reads
+    # them as ANSI, as upstream does.
+    with open(out_path, "w", encoding="utf-8-sig", newline="\n") as fh:
         fh.write("\n".join(lines) + "\n")
 
 

@@ -160,7 +160,10 @@ CoreText 或 fontconfig。
 **合成粗体按 GDI 的规则实现**，逐点测量得出，包括旋转文字时更重的笔画。
 
 **内嵌字体可用**，通过 CSRI 和在所有平台上都可以：附件字体直接交给 FreeType，
-不再安装到系统里。
+不再安装到系统里。GDI 能用哪些名字找到字体，这里就能用哪些名字找到：Windows 家族名
+（如“Source Han Sans SC Medium”）、排版家族名、完整名称，以及任何语言的本地化名称
+（包括老式中日韩字体里用 GBK/Big5/Shift-JIS 编码的名称）。同一家族内嵌了多个字重时，
+会像 GDI 一样按请求的字重和斜体选择对应的字体文件。
 
 **去掉了 DirectShow 部分。** DirectShow 滤镜及其属性页、VobSub/DVB/HDMV/CC/USF/
 SSF/RealText 解析器和 DirectX 字幕图层后端都已删除，Aegisub、AviSynth 和 BDN+XML
