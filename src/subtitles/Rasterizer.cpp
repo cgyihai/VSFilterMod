@@ -668,6 +668,19 @@ bool Rasterizer::CreateWidenedRegion(int rx, int ry)
     if(rx < 0) rx = 0;
     if(ry < 0) ry = 0;
 
+    /* \bord65535 widens a glyph to a million pixels square, which would take
+     * minutes per frame. Past the limits ScanConvert applies to shapes, the
+     * word is not drawn. Units are eighths of a pixel. */
+    const int64_t w = (int64_t)mWidth + 2 * (int64_t)rx, h = (int64_t)mHeight + 2 * (int64_t)ry;
+    if(w > ((int64_t)1 << 23) || h > ((int64_t)1 << 23) || w * h > ((int64_t)1 << 34))
+    {
+        mWidth = mHeight = 0;
+        mOutline.clear();
+        mWideOutline.clear();
+        mWideBorder = 0;
+        return true;
+    }
+
     mWideBorder = std::max(rx, ry);
 
     if(ry > 0)
@@ -707,6 +720,13 @@ bool Rasterizer::Rasterize(int xsub, int ysub, int fBlur, double fGaussianBlur)
         return true;
     }
 
+    /* Upper bounds, as libass has, on the two blurs: their cost grows with
+     * the blur, and beyond these they are invisible anyway. */
+    if(fBlur < 0) fBlur = 0;
+    if(fBlur > 255) fBlur = 255;
+    if(!(fGaussianBlur > 0)) fGaussianBlur = 0;        // also NaN
+    if(fGaussianBlur > 256) fGaussianBlur = 256;
+
     xsub &= 7;
     ysub &= 7;
 
@@ -742,6 +762,12 @@ bool Rasterizer::Rasterize(int xsub, int ysub, int fBlur, double fGaussianBlur)
     mOverlayWidth = ((width + 7) >> 3) + 1;
     // fixed image height
     mOverlayHeight = ((height + 14) >> 3) + 1;
+
+    if((int64_t)mOverlayWidth * mOverlayHeight > ((int64_t)1 << 28))
+    {
+        mOverlayWidth = mOverlayHeight = 0;     // see ScanConvert's limit
+        return true;
+    }
 
     mpOverlayBuffer = DNew BYTE[2 * mOverlayWidth * mOverlayHeight];
     memset(mpOverlayBuffer, 0, 2 * mOverlayWidth * mOverlayHeight);
