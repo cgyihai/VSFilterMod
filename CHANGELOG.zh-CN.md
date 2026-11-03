@@ -2,7 +2,7 @@
 
 [English](CHANGELOG.md) | **简体中文**
 
-## 未发布
+## 1.3.0
 
 ### VapourSynth
 
