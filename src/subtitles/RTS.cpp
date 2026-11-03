@@ -20,7 +20,6 @@
  */
 
 #include "../compat/vsfm_compat.h"
-#include "../compat/cpu_compat.h"
 #include <cmath>
 #include <math.h>
 #include <time.h>
@@ -152,371 +151,181 @@ void CWord::Paint(CPoint p, CPoint org)
         m_pOpaqueBox->Paint(p, org);
 }
 
-#ifdef _VSMOD
-/* SSE on x86, sse2neon on AArch64 when available; otherwise Transform takes
- * its C path. */
-#include "../compat/simd_compat.h"
+#include "../compat/det_float.h"
+
+/* The path is moved to screen space in single precision with the operations
+ * of upstream's SSE code, one point at a time; see compat/det_float.h for why
+ * this gives the same result on every CPU. Nothing below may be contracted
+ * into an FMA: meson.build turns that off for GCC and Clang, and these cover
+ * the compilers that honour a pragma for it. */
+#if defined(__clang__)
+#pragma STDC FP_CONTRACT OFF
+#elif defined(_MSC_VER)
+#pragma fp_contract(off)
 #endif
 
 void CWord::Transform(CPoint org)
 {
-    double scalex = isOpaqueBox ? 1 : m_style.fontScaleX / 100;
-    double scaley = isOpaqueBox ? 1 : m_style.fontScaleY / 100;
-    const double xzoomf = m_scalex * 20000.0;
-    const double yzoomf = m_scaley * 20000.0;
+    using vsfm::MaxSs;
+    using vsfm::MinSs;
 
-    double caz = cos((3.1415 / 180) * m_style.fontAngleZ);
-    double saz = sin((3.1415 / 180) * m_style.fontAngleZ);
-    double cax = cos((3.1415 / 180) * m_style.fontAngleX);
-    double sax = sin((3.1415 / 180) * m_style.fontAngleX);
-    double cay = cos((3.1415 / 180) * m_style.fontAngleY);
-    double say = sin((3.1415 / 180) * m_style.fontAngleY);
+    const double scalex = isOpaqueBox ? 1 : m_style.fontScaleX / 100;
+    const double scaley = isOpaqueBox ? 1 : m_style.fontScaleY / 100;
+
+    /* Upstream's angle conversion, 3.1415 and all; changing it would move
+     * every rotated glyph. */
+    const float caz = (float)cos((3.1415 / 180) * m_style.fontAngleZ);
+    const float saz = (float)sin((3.1415 / 180) * m_style.fontAngleZ);
+    const float cax = (float)cos((3.1415 / 180) * m_style.fontAngleX);
+    const float sax = (float)sin((3.1415 / 180) * m_style.fontAngleX);
+    const float cay = (float)cos((3.1415 / 180) * m_style.fontAngleY);
+    const float say = (float)sin((3.1415 / 180) * m_style.fontAngleY);
+
+    const float xscale = (float)scalex;
+    const float yscale = (float)scaley;
+    const float xshift = (float)m_style.fontShiftX;
+    const float yshift = (float)m_style.fontShiftY;
+    const float xorg = (float)org.x;
+    const float yorg = (float)org.y;
+    const float xzoomf = (float)(m_scalex * 20000.0);
+    const float yzoomf = (float)(m_scaley * 20000.0);
 
 #ifdef _VSMOD
-    double xrnd = m_style.mod_rand.X * 100;
-    double yrnd = m_style.mod_rand.Y * 100;
-    double zrnd = m_style.mod_rand.Z * 100;
+    const double xrnd = m_style.mod_rand.X * 100;
+    const double yrnd = m_style.mod_rand.Y * 100;
+    const double zrnd = m_style.mod_rand.Z * 100;
+    const bool is_dist = m_style.mod_distort.enabled;
+    const float z0 = (float)m_style.mod_z;
 
     vsfm_srand(m_style.mod_rand.Seed);
-    // CPUID from VDub
-    bool fSSE2 = !!(g_cpuid.m_flags & CCpuID::sse2);
-
-    // SSE code
-    // speed up ~1.5-1.7x
-#if VSFM_HAVE_SSE2
-    if(fSSE2)
-    {
-        __m128 __xshift = _mm_set_ps1(m_style.fontShiftX);
-        __m128 __yshift = _mm_set_ps1(m_style.fontShiftY);
-
-        __m128 __xorg = _mm_set_ps1(org.x);
-        __m128 __yorg = _mm_set_ps1(org.y);
-
-        __m128 __xscale = _mm_set_ps1(scalex);
-        __m128 __yscale = _mm_set_ps1(scaley);
-        const __m128 __xzoomf = _mm_set_ps1((float)(m_scalex * 20000.0));
-        const __m128 __yzoomf = _mm_set_ps1((float)(m_scaley * 20000.0));
-        const __m128 __1000 = _mm_set_ps1(1000.0f);
-
-        __m128 __xsz = _mm_setzero_ps();
-        __m128 __ysz = _mm_setzero_ps();
-
-        __m128 __dst1x, __dst1y, __dst213x, __dst213y, __dst3x, __dst3y;
-
-        __m128 __miny;
-        __m128 __minx = _mm_set_ps(INT_MAX, INT_MAX, 0, 0);
-        __m128 __max = _mm_set_ps(-INT_MAX, -INT_MAX, 1, 1);
-
-        bool is_dist = m_style.mod_distort.enabled;
-        if(is_dist)
-        {
-            for(int i = 0; i < mPathPoints; i++)
-            {
-                __m128 __point = _mm_set_ps(mpPathPoints[i].x, mpPathPoints[i].y, 0, 0);
-                __minx = _mm_min_ps(__minx, __point);
-                __max = _mm_max_ps(__max, __point);
-            }
-
-            __m128 __zero = _mm_setzero_ps();
-            __max = _mm_sub_ps(__max, __minx); // xsz, ysz, 1, 1
-            __max = _mm_max_ps(__max, __zero);
-
-            __xsz = _mm_shuffle_ps(__max, __max, _MM_SHUFFLE(3,3,3,3));
-            __ysz = _mm_shuffle_ps(__max, __max, _MM_SHUFFLE(2,2,2,2));
-
-            __miny = _mm_shuffle_ps(__minx, __minx, _MM_SHUFFLE(2,2,2,2));
-            __minx = _mm_shuffle_ps(__minx, __minx, _MM_SHUFFLE(3,3,3,3));
-
-            __dst1x = _mm_set_ps1(m_style.mod_distort.pointsx[0]);
-            __dst1y = _mm_set_ps1(m_style.mod_distort.pointsy[0]);
-            __dst3x = _mm_set_ps1(m_style.mod_distort.pointsx[2]);
-            __dst3y = _mm_set_ps1(m_style.mod_distort.pointsy[2]);
-            __dst213x = _mm_set_ps1(m_style.mod_distort.pointsx[1]); // 2 - 1 - 3
-            __dst213x = _mm_sub_ps(__dst213x, __dst1x);
-            __dst213x = _mm_sub_ps(__dst213x, __dst3x);
-
-            __dst213y = _mm_set_ps1(m_style.mod_distort.pointsy[1]);
-            __dst213y = _mm_sub_ps(__dst213y, __dst1y);
-            __dst213y = _mm_sub_ps(__dst213y, __dst3y); 
-        }
-
-        __m128 __caz = _mm_set_ps1(caz);
-        __m128 __saz = _mm_set_ps1(saz);
-        __m128 __cax = _mm_set_ps1(cax);
-        __m128 __sax = _mm_set_ps1(sax);
-        __m128 __cay = _mm_set_ps1(cay);
-        __m128 __say = _mm_set_ps1(say);
-
-        // this can be paralleled for openmp
-        int mPathPointsD4 = mPathPoints / 4;
-        int mPathPointsM4 = mPathPoints % 4;
-
-        for(ptrdiff_t i = 0; i < mPathPointsD4 + 1; i++)
-        {
-            __m128 __pointx, __pointy;
-            // we cann't use load .-.
-            if(i == mPathPointsD4) // last cycle
-            {
-                switch(mPathPointsM4)
-                {
-                case 0: continue;
-                case 1:
-                    __pointx = _mm_set_ps(mpPathPoints[4 * i + 0].x, 0, 0, 0);
-                    __pointy = _mm_set_ps(mpPathPoints[4 * i + 0].y, 0, 0, 0);
-                    break;
-                case 2:
-                    __pointx = _mm_set_ps(mpPathPoints[4 * i + 0].x, mpPathPoints[4 * i + 1].x, 0, 0);
-                    __pointy = _mm_set_ps(mpPathPoints[4 * i + 0].y, mpPathPoints[4 * i + 1].y, 0, 0);
-                    break;
-                case 3:
-                    __pointx = _mm_set_ps(mpPathPoints[4 * i + 0].x, mpPathPoints[4 * i + 1].x, mpPathPoints[4 * i + 2].x, 0);
-                    __pointy = _mm_set_ps(mpPathPoints[4 * i + 0].y, mpPathPoints[4 * i + 1].y, mpPathPoints[4 * i + 2].y, 0);
-                    break;
-                }
-            }
-            else
-            {
-                // 
-                __pointx = _mm_set_ps(mpPathPoints[4 * i + 0].x, mpPathPoints[4 * i + 1].x, mpPathPoints[4 * i + 2].x, mpPathPoints[4 * i + 3].x);
-                __pointy = _mm_set_ps(mpPathPoints[4 * i + 0].y, mpPathPoints[4 * i + 1].y, mpPathPoints[4 * i + 2].y, mpPathPoints[4 * i + 3].y);
-            }
-            __m128 __pointz = _mm_set_ps1(m_style.mod_z);
-
-            // distort
-            if(is_dist)
-            {
-                //P = P0 + (P1 - P0)u + (P3 - P0)v + (P0 + P2 - P1 - P3)uv
-                __m128 __u = _mm_sub_ps(__pointx, __minx);
-                __m128 __v = _mm_sub_ps(__pointy, __miny);
-                __m128 __1_xsz = _mm_rcp_ps(__xsz);
-                __m128 __1_ysz = _mm_rcp_ps(__ysz);
-                __u = _mm_mul_ps(__u, __1_xsz);
-                __v = _mm_mul_ps(__v, __1_ysz);
-
-                // x
-                __pointx = _mm_mul_ps(__dst213x, __u);
-                __pointx = _mm_mul_ps(__pointx, __v);
-
-                __m128 __tmpx = _mm_mul_ps(__dst3x, __v);
-                __pointx = _mm_add_ps(__pointx, __tmpx);
-                __tmpx = _mm_mul_ps(__dst1x, __u);
-                __pointx = _mm_add_ps(__pointx, __tmpx);
-
-                __pointx = _mm_mul_ps(__pointx, __xsz);
-                __pointx = _mm_add_ps(__pointx, __minx);
-
-                // y
-                __pointy = _mm_mul_ps(__dst213y, __u);
-                __pointy = _mm_mul_ps(__pointy, __v);
-
-                __m128 __tmpy = _mm_mul_ps(__dst3y, __v);
-                __pointy = _mm_add_ps(__pointy, __tmpy);
-                __tmpy = _mm_mul_ps(__dst1y, __u);
-                __pointy = _mm_add_ps(__pointy, __tmpy);
-
-                __pointy = _mm_mul_ps(__pointy, __ysz);
-                __pointy = _mm_add_ps(__pointy, __miny);
-            }
-
-            // randomize
-            if(xrnd!=0 || yrnd!=0 || zrnd!=0)
-            {
-                alignas(16) float rx[4], ry[4], rz[4];
-                for(int k=0;k<4;k++)
-                {
-                    rx[k] = xrnd > 0 ? (xrnd - vsfm_rand() % (int)(xrnd * 2 + 1)) : 0;
-                    ry[k] = yrnd > 0 ? (yrnd - vsfm_rand() % (int)(yrnd * 2 + 1)) : 0;
-                    rz[k] = zrnd > 0 ? (zrnd - vsfm_rand() % (int)(zrnd * 2 + 1)) : 0;
-                }
-                __m128 __001 = _mm_set_ps1(0.01f);
-
-                if(xrnd!=0)
-                {
-                    __m128 __rx = _mm_load_ps(rx);
-                    __rx = _mm_mul_ps(__rx, __001);
-                    __pointx = _mm_add_ps(__pointx, __rx);
-                }
-
-                if(yrnd!=0)
-                {
-                    __m128 __ry = _mm_load_ps(ry);
-                    __ry = _mm_mul_ps(__ry, __001);
-                    __pointy = _mm_add_ps(__pointy, __ry);
-                }
-
-                if(zrnd!=0)
-                {
-                    __m128 __rz = _mm_load_ps(rz);
-                    __rz = _mm_mul_ps(__rz, __001);
-                    __pointz = _mm_add_ps(__pointz, __rz);
-                }
-            }
-
-            // scale and shift
-            __m128 __tmpx;
-            if(m_style.fontShiftX!=0)
-            {
-                __tmpx = _mm_mul_ps(__xshift, __pointy);
-                __tmpx = _mm_add_ps(__tmpx, __pointx);
-            }
-            else
-            {
-                __tmpx = __pointx;
-            }
-            __tmpx = _mm_mul_ps(__tmpx, __xscale);
-            __tmpx = _mm_sub_ps(__tmpx, __xorg);
-
-            __m128 __tmpy;
-            if(m_style.fontShiftY!=0)
-            {
-                __tmpy = _mm_mul_ps(__yshift, __pointx);
-                __tmpy = _mm_add_ps(__tmpy, __pointy);
-            }
-            else
-            {
-                __tmpy = __pointy;
-            }
-            __tmpy = _mm_mul_ps(__tmpy, __yscale);
-            __tmpy = _mm_sub_ps(__tmpy, __yorg);
-
-            // rotate
-            __m128 __xx = _mm_mul_ps(__tmpx, __caz);
-            __m128 __yy = _mm_mul_ps(__tmpy, __saz);
-            __pointx = _mm_add_ps(__xx, __yy);
-            __xx = _mm_mul_ps(__tmpx, __saz);
-            __yy = _mm_mul_ps(__tmpy, __caz);
-            __pointy = _mm_sub_ps(__yy, __xx);
-
-            __m128 __zz = _mm_mul_ps(__pointz, __sax);
-            __yy = _mm_mul_ps(__pointy, __cax);
-            __tmpy = __pointy;
-            __pointy = _mm_add_ps(__yy, __zz);
-            __zz = _mm_mul_ps(__pointz, __cax);
-            __yy = _mm_mul_ps(__tmpy, __sax);
-            __pointz = _mm_sub_ps(__yy, __zz);
-
-            __xx = _mm_mul_ps(__pointx, __cay);
-            __zz = _mm_mul_ps(__pointz, __say);
-            __tmpx = __pointx;
-            __pointx = _mm_add_ps(__xx, __zz);
-            __xx = _mm_mul_ps(__tmpx, __say);
-            __zz = _mm_mul_ps(__pointz, __cay);
-            __pointz = _mm_sub_ps(__xx, __zz);
-
-            __m128 __tmpzz = _mm_add_ps(__pointz, __xzoomf); // zz + xzoomf
-
-            __xx = _mm_mul_ps(__pointx, __xzoomf);       // xx * xzoomf
-            __pointx = _mm_div_ps(__xx, _mm_max_ps(__tmpzz, __1000)); // x = (xx * xzoomf) / std::max((zz + xzoomf), 1000.0)
-
-            __tmpzz = _mm_add_ps(__pointz, __yzoomf);       // zz + yzoomf
-
-            __yy = _mm_mul_ps(__pointy, __yzoomf);       // yy * yzoomf
-            __pointy = _mm_div_ps(__yy, _mm_max_ps(__tmpzz, __1000)); // y = yy * yzoomf / std::max((zz + yzoomf), 1000.0);
-
-            __pointx = _mm_add_ps(__pointx, __xorg);
-            __pointy = _mm_add_ps(__pointy, __yorg);
-
-            __m128 __05 = _mm_set_ps1(0.5);
-
-            __pointx = _mm_add_ps(__pointx, __05);
-            __pointy = _mm_add_ps(__pointy, __05);
-
-            /* __m128::m128_f32 is an MSVC-only union member; spill to an
-             * array instead, which every compiler accepts. */
-            float px[4], py[4];
-            _mm_storeu_ps(px, __pointx);
-            _mm_storeu_ps(py, __pointy);
-
-            const int count = (i == mPathPointsD4) ? mPathPointsM4 : 4;
-            for(int k = 0; k < count; k++)
-            {
-                mpPathPoints[i*4+k].x = static_cast<LONG>(px[3-k]);
-                mpPathPoints[i*4+k].y = static_cast<LONG>(py[3-k]);
-            }
-        }
-    }
-    else
-#endif
-    // C-code
-    {
-        // patch m008. distort
-        int xsz, ysz;
-        double dst1x, dst1y, dst2x, dst2y, dst3x, dst3y;
-        int minx = INT_MAX, miny = INT_MAX, maxx = -INT_MAX, maxy = -INT_MAX;
-
-        bool is_dist = m_style.mod_distort.enabled;
-        if(is_dist)
-        {
-            for(int i = 0; i < mPathPoints; i++)
-            {
-                if(minx > mpPathPoints[i].x) minx = mpPathPoints[i].x;
-                if(miny > mpPathPoints[i].y) miny = mpPathPoints[i].y;
-                if(maxx < mpPathPoints[i].x) maxx = mpPathPoints[i].x;
-                if(maxy < mpPathPoints[i].y) maxy = mpPathPoints[i].y;
-            }
-
-            xsz = std::max(maxx - minx, 0);
-            ysz = std::max(maxy - miny, 0);
-
-            dst1x = m_style.mod_distort.pointsx[0];
-            dst1y = m_style.mod_distort.pointsy[0];
-            dst2x = m_style.mod_distort.pointsx[1];
-            dst2y = m_style.mod_distort.pointsy[1];
-            dst3x = m_style.mod_distort.pointsx[2];
-            dst3y = m_style.mod_distort.pointsy[2];
-        }
-#endif
-
-        for(ptrdiff_t i = 0; i < mPathPoints; i++)
-        {
-            double x, y, z, xx, yy, zz;
-
-            x = mpPathPoints[i].x;
-            y = mpPathPoints[i].y;
-#ifdef _VSMOD
-            // patch m002. Z-coord
-            z = m_style.mod_z;
-
-            double u, v;
-            if((is_dist) && (xsz) && (ysz))
-            {
-                u = (x - minx) / xsz;
-                v = (y - miny) / ysz;
-
-                x = minx + (0 + (dst1x - 0) * u + (dst3x - 0) * v + (0 + dst2x - dst1x - dst3x) * u * v) * xsz;
-                y = miny + (0 + (dst1y - 0) * u + (dst3y - 0) * v + (0 + dst2y - dst1y - dst3y) * u * v) * ysz;
-                //P = P0 + (P1 - P0)u + (P3 - P0)v + (P0 + P2 - P1 - P3)uv
-            }
-
-            // patch m003. random text points
-            x = xrnd > 0 ? (xrnd - vsfm_rand() % (int)(xrnd * 2 + 1)) / 100.0 + x : x;
-            y = yrnd > 0 ? (yrnd - vsfm_rand() % (int)(yrnd * 2 + 1)) / 100.0 + y : y;
-            z = zrnd > 0 ? (zrnd - vsfm_rand() % (int)(zrnd * 2 + 1)) / 100.0 + z : z;
 #else
-            z = 0;
+    const double xrnd = 0, yrnd = 0, zrnd = 0;
+    const bool is_dist = false;
+    const float z0 = 0;
 #endif
-            double _x = x;
-            x = scalex * (x + m_style.fontShiftX * y) - org.x;
-            y = scaley * (y + m_style.fontShiftY * _x) - org.y;
+    const bool jitter = xrnd != 0 || yrnd != 0 || zrnd != 0;
 
-            xx = x * caz + y * saz;
-            yy = -(x * saz - y * caz);
-            zz = z;
+    // patch m008. distort: P = P0 + (P1 - P0)u + (P3 - P0)v + (P0 + P2 - P1 - P3)uv
+    float minx = 2147483648.0f, miny = 2147483648.0f;   // (float)INT_MAX
+    float xsz = 0, ysz = 0, rxsz = 0, rysz = 0;
+    float dst1x = 0, dst1y = 0, dst3x = 0, dst3y = 0, dst213x = 0, dst213y = 0;
 
-            x = xx;
-            y = yy * cax + zz * sax;
-            z = yy * sax - zz * cax;
-
-            xx = x * cay + z * say;
-            yy = y;
-            zz = x * say - z * cay;
-
-            x = xx * xzoomf / std::max(zz + xzoomf, 1000.0);
-            y = yy * yzoomf / std::max(zz + yzoomf, 1000.0);
-
-            mpPathPoints[i].x = (LONG)(x + org.x + 0.5);
-            mpPathPoints[i].y = (LONG)(y + org.y + 0.5);
+#ifdef _VSMOD
+    if(is_dist)
+    {
+        float maxx = -2147483648.0f, maxy = -2147483648.0f;
+        for(size_t i = 0; i < mPathPoints; i++)
+        {
+            const float px = (float)mpPathPoints[i].x;
+            const float py = (float)mpPathPoints[i].y;
+            minx = MinSs(minx, px);
+            miny = MinSs(miny, py);
+            maxx = MaxSs(maxx, px);
+            maxy = MaxSs(maxy, py);
         }
+
+        xsz = MaxSs(maxx - minx, 0.0f);
+        ysz = MaxSs(maxy - miny, 0.0f);
+
+        /* Upstream multiplies by RCPSS's estimate of 1/size rather than
+         * dividing. A shape with no width or height gets an infinite
+         * reciprocal and its points become NaN, which CvtTruncSs maps to
+         * INT32_MIN exactly as the instruction does. */
+        rxsz = vsfm::RcpIntel(xsz);
+        rysz = vsfm::RcpIntel(ysz);
+
+        dst1x = (float)m_style.mod_distort.pointsx[0];
+        dst1y = (float)m_style.mod_distort.pointsy[0];
+        dst3x = (float)m_style.mod_distort.pointsx[2];
+        dst3y = (float)m_style.mod_distort.pointsy[2];
+        dst213x = ((float)m_style.mod_distort.pointsx[1] - dst1x) - dst3x;
+        dst213y = ((float)m_style.mod_distort.pointsy[1] - dst1y) - dst3y;
+    }
+#endif
+
+    /* patch m003. \rnd jitter is drawn four points at a time, as upstream's
+     * SSE code did: x, y and z for each of four lanes, the lanes in reverse
+     * point order, and a full four draws even for a final group of fewer
+     * points. The pattern a given \rnds seed produces depends on this. */
+    float rx[4] = {0, 0, 0, 0}, ry[4] = {0, 0, 0, 0}, rz[4] = {0, 0, 0, 0};
+
+    for(size_t i = 0; i < mPathPoints; i++)
+    {
+        const size_t lane = 3 - (i & 3);
+
+        if(jitter && (i & 3) == 0)
+        {
+            for(int k = 0; k < 4; k++)
+            {
+                rx[k] = xrnd > 0 ? (float)(xrnd - vsfm_rand() % (int)(xrnd * 2 + 1)) : 0;
+                ry[k] = yrnd > 0 ? (float)(yrnd - vsfm_rand() % (int)(yrnd * 2 + 1)) : 0;
+                rz[k] = zrnd > 0 ? (float)(zrnd - vsfm_rand() % (int)(zrnd * 2 + 1)) : 0;
+            }
+        }
+
+        float px = (float)mpPathPoints[i].x;
+        float py = (float)mpPathPoints[i].y;
+        float pz = z0;
+
+        if(is_dist)
+        {
+            const float u = (px - minx) * rxsz;
+            const float v = (py - miny) * rysz;
+
+            float x = dst213x * u;
+            x = x * v;
+            x = x + dst3x * v;
+            x = x + dst1x * u;
+            x = x * xsz;
+            x = x + minx;
+
+            float y = dst213y * u;
+            y = y * v;
+            y = y + dst3y * v;
+            y = y + dst1y * u;
+            y = y * ysz;
+            y = y + miny;
+
+            px = x;
+            py = y;
+        }
+
+        if(jitter)
+        {
+            if(xrnd != 0) px = px + rx[lane] * 0.01f;
+            if(yrnd != 0) py = py + ry[lane] * 0.01f;
+            if(zrnd != 0) pz = pz + rz[lane] * 0.01f;
+        }
+
+        // shear (\fax, \fay) and scale
+        float tx = m_style.fontShiftX != 0 ? xshift * py + px : px;
+        tx = tx * xscale - xorg;
+        float ty = m_style.fontShiftY != 0 ? yshift * px + py : py;
+        ty = ty * yscale - yorg;
+
+        // \frz
+        const float x1 = tx * caz + ty * saz;
+        const float y1 = ty * caz - tx * saz;
+
+        // \frx
+        const float y2 = y1 * cax + pz * sax;
+        const float z2 = y1 * sax - pz * cax;
+
+        // \fry
+        const float x3 = x1 * cay + z2 * say;
+        const float z3 = x1 * say - z2 * cay;
+
+        // perspective
+        float x = (x3 * xzoomf) / MaxSs(z3 + xzoomf, 1000.0f);
+        float y = (y2 * yzoomf) / MaxSs(z3 + yzoomf, 1000.0f);
+
+        x = x + xorg;
+        y = y + yorg;
+        x = x + 0.5f;
+        y = y + 0.5f;
+
+        mpPathPoints[i].x = vsfm::CvtTruncSs(x);
+        mpPathPoints[i].y = vsfm::CvtTruncSs(y);
     }
 }
 

@@ -44,6 +44,18 @@ else
         language : ['c', 'cpp'])
 endif
 
+# Output must not depend on the target CPU. GCC and Clang fuse a * b + c into
+# a single FMA wherever the target has one -- every AArch64 core, so Apple
+# Silicon and ARM Linux -- and an FMA rounds once where x86-64 rounds twice.
+# That moves glyph points by a fraction of a pixel and changes the edges of
+# animated (\move, \t, \org) lines. MSVC does not contract under its default
+# /fp:precise; never build with /fp:fast or -ffast-math.
+if cxx.get_id() != 'msvc'
+    add_project_arguments(
+        cxx.get_supported_arguments('-ffp-contract=off'),
+        language : ['c', 'cpp'])
+endif
+
 # SSE2 is a baseline assumption of the blend kernels. It is implied by x86-64
 # and by AArch64-through-sse2neon; only 32-bit x86 has to ask for it.
 if host_cpu == 'x86'
@@ -137,6 +149,7 @@ vsfm_src = files(
     'src/compat/cstring_compat.cpp',
     'src/compat/text_compat.cpp',
     'src/compat/cpu_compat.cpp',
+    'src/compat/det_float.cpp',
 
     'src/font/font_engine.cpp',
 
@@ -204,6 +217,13 @@ if get_option('tests')
     test('csri-abi', csri_loader_test,
          args : [csri_lib.full_path()],
          depends : [csri_lib])
+
+    det_float_test = executable('det_float_test',
+        files('tests/det_float_test.cpp', 'src/compat/det_float.cpp'),
+        include_directories : inc,
+        build_by_default : false)
+
+    test('det-float', det_float_test)
 
     # Type-checks the POSIX branch of the compatibility layer while building
     # on Windows, by undefining _WIN32 after the system headers are in. It
