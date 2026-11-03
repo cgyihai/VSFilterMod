@@ -142,8 +142,9 @@ std::string Mutate(std::string s, Rng& rng)
 /* An input that takes this long is a hang -- an infinite loop in a parser,
  * say -- and is reported like a crash, its script left in fuzz-crash.ass.
  * Generous, because legitimate inputs can be slow under the sanitizers: a
- * mutated PlayResY of 2 scales a 48 pt font to thousands of pixels. */
-const unsigned kHangSeconds = 60;
+ * mutated PlayResY of 1 scales a 48 pt font to 8000 pixels, which takes
+ * 10 s to render in a release build and ten times that under ASan. */
+const unsigned kHangSeconds = 180;
 
 void OnHang(int)
 {
