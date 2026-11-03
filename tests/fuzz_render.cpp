@@ -155,6 +155,23 @@ void OnHang(int)
 }
 #endif
 
+/* A PlayResX or PlayResY near zero scales everything up by the frame size
+ * over it -- 180x for "PlayResY: 1" on this 320x180 frame -- and widening the
+ * resulting giant shapes by a correspondingly giant border legitimately takes
+ * minutes. Such mutants test nothing but patience, so they are skipped. */
+bool HasTinyPlayRes(const std::string& s)
+{
+    for (const char* key : {"PlayResX:", "PlayResY:"}) {
+        size_t at = 0;
+        while ((at = s.find(key, at)) != std::string::npos) {
+            at += std::strlen(key);
+            const long v = std::strtol(s.c_str() + at, nullptr, 10);
+            if (v > 0 && v < 16) return true;
+        }
+    }
+    return false;
+}
+
 bool ReadFile(const char* path, std::string* out)
 {
     FILE* f = std::fopen(path, "rb");
@@ -196,6 +213,7 @@ int main(int argc, char** argv)
 
     for (long it = 0; it < iterations; ++it) {
         const std::string m = Mutate(seeds[rng.Below(seeds.size())], rng);
+        if (HasTinyPlayRes(m)) continue;
         if (FILE* f = std::fopen("fuzz-crash.ass", "wb")) {
             std::fwrite(m.data(), 1, m.size(), f);
             std::fclose(f);
