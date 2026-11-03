@@ -8,8 +8,8 @@
 
 把 VSFilterMod 字幕渲染器移植到 **Windows、Linux 和 macOS**。
 编译产物是一个库，既是 Aegisub 用的 **CSRI** 插件，也是 **AviSynth+** 插件
-（`TextSubMod` / `MaskSubMod`）；另外还有命令行工具 `vsfmrender`，可直接把字幕
-渲染成蓝光制作用的 **BDN+XML**。
+（`TextSubMod` / `MaskSubMod`）和 **VapourSynth** 插件（`vsfm.TextSubMod`）；
+另外还有命令行工具 `vsfmrender`，可直接把字幕渲染成蓝光制作用的 **BDN+XML**。
 
 ASS 解析器和光栅化器都是 VSFilterMod 原版代码，所以全部扩展标签照旧可用：
 `\pngimg` 图片背景、渐变、可移动矢量 clip、`\rnd` 抖动、distort、`\frs` 字符旋转、
@@ -36,6 +36,8 @@ Z 坐标、竖向间距等。
 - **Aegisub 插件**（CSRI），用于实时预览。
 - **AviSynth+ 插件**，`TextSubMod` / `MaskSubMod` 的参数与原版一致，现有脚本和
   avs2bdnxml 可以照常使用。
+- **VapourSynth 插件**（API 4），`vsfm.TextSubMod` 的参数与原版一致：8 位输出与
+  原版相同，9–16 位的 YUV 和 RGB 按完整精度混合，并支持 4:2:2 和灰度。
 - **BDN+XML 输出**：`vsfmrender` 的结果与 avs2bdnxml 调用本插件 `MaskSubMod`
   得到的结果逐字节相同。
 - **内嵌字体**（`[Fonts]` 附件）可用，通过 CSRI 也可以。
@@ -98,6 +100,23 @@ MaskSubMod("subtitle.ass", 1920, 1080, 23.976, 3000)   # RGBA 输出，给 avs2b
 
 任何通过 AviSynth+ 加载脚本的 avs2bdnxml 都能使用：32 位的 avs2bdnxml 或
 AviSynth+ 请用 32 位（`windows-x86`）版本，否则用 64 位版本。
+
+### VapourSynth
+
+同一个库也是 VapourSynth 插件（API 4，VapourSynth R55 或更新版本），命名空间和参数
+与原版相同：
+
+```python
+import vapoursynth as vs
+core = vs.core
+core.std.LoadPlugin("vsfiltermod.dll")      # 已放入插件目录时可省略
+clip = core.vsfm.TextSubMod(clip, "subtitle.ass")
+# TextSubMod(clip, file, charset=1, fps=..., vfr="timecodes.txt")
+```
+
+支持 4:2:0 或 4:2:2 的 YUV、灰度和 RGB，每个采样 8 到 16 位。YUV420P8 和 RGB24
+的输出与原版滤镜完全相同。原版把 10 位和 16 位片段拆成两个 8 位的一半来绘制；这里每种
+位深都按自身精度混合，因此 `accurate=` 仍可传入，但已不再需要。4:4:4 请先转换为 RGB。
 
 ### vsfmrender
 
@@ -190,7 +209,10 @@ CoreText 或 fontconfig。
 
 **去掉了 DirectShow 部分。** DirectShow 滤镜及其属性页、VobSub/DVB/HDMV/CC/USF/
 SSF/RealText 解析器和 DirectX 字幕图层后端都已删除，Aegisub、AviSynth 和 BDN+XML
-输出都用不到它们。`VobSub()` 和 VapourSynth 插件没有移植。
+输出都用不到它们。AviSynth 和 VapourSynth 中的 `VobSub()` 都没有移植。
+
+**VapourSynth 插件基于 API 4**（原版用的是已淘汰的 API 3），高位深按完整精度混合，
+不再把采样拆成两半。
 
 **渲染结果不依赖机器。** DPI 固定为 96，字符集到代码页的映射使用固定表格。
 唯一的例外是 Windows 上的缺字回退，它和 GDI 一样遵循本机的 SystemLink 设置。
@@ -211,6 +233,7 @@ SSF/RealText 解析器和 DirectX 字幕图层后端都已删除，Aegisub、Avi
 ## 致谢与许可证
 
 基于 Gabest（Guliverkli）的 **VSFilter** 和 **VSFilterMod**。`include/avisynth`
-中的 AviSynth+ C API 头文件来自 AviSynth+ 项目。
+中的 AviSynth+ C API 头文件来自 AviSynth+ 项目；`include/vapoursynth/VapourSynth4.h`
+来自 VapourSynth（LGPL 2.1）。
 
 与原版相同，采用 [GNU 通用公共许可证 2.0 或更高版本](LICENSE)。

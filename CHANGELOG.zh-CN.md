@@ -2,6 +2,21 @@
 
 [English](CHANGELOG.md) | **简体中文**
 
+## 未发布
+
+### VapourSynth
+
+- 新增：插件同时也是 VapourSynth 插件，`vsfm.TextSubMod(clip, file, charset, fps,
+  vfr, accurate)`，标识符、命名空间和参数都与原版相同，基于 API 4（VapourSynth R55
+  及更新版本）。
+- YUV420P8 和 RGB24 的渲染结果与原版滤镜完全相同。9 到 16 位的 4:2:0 与 4:2:2 YUV、
+  YUV422P8、灰度和高位深 RGB 按同样的算法以片段自身精度混合，不再像原版那样拆成两个
+  8 位的一半；`accurate=` 仍可传入，但不起作用。
+- CI 在 Linux、macOS 和 Windows 上把插件载入 VapourSynth，并用同一个
+  `tests/vsplugin/expected.txt` 检查输出。
+- AviSynth+ 与 VapourSynth 入口共用一套渲染流程（`src/vsfilter/sub_source.cpp`），
+  AviSynth 的输出不变。
+
 ## 1.2.0
 
 ### 所有平台输出一致

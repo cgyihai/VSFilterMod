@@ -7,9 +7,10 @@
 **English** | [简体中文](README.zh-CN.md)
 
 A port of the VSFilterMod subtitle renderer to **Windows, Linux and macOS**.
-It ships as one library that is both a **CSRI** plugin for Aegisub and an
-**AviSynth+** plugin (`TextSubMod` / `MaskSubMod`), plus `vsfmrender`, a
-command line tool that renders subtitles to **BDN+XML** for Blu-ray authoring.
+It ships as one library that is a **CSRI** plugin for Aegisub, an
+**AviSynth+** plugin (`TextSubMod` / `MaskSubMod`) and a **VapourSynth**
+plugin (`vsfm.TextSubMod`), plus `vsfmrender`, a command line tool that
+renders subtitles to **BDN+XML** for Blu-ray authoring.
 
 The ASS parser and the rasterizer are VSFilterMod's own, so the whole mod tag
 set renders as it always did: `\pngimg` picture backgrounds, gradients,
@@ -38,6 +39,9 @@ Z-coordinates and vertical spacing.
 - **Aegisub plugin** (CSRI) for live preview.
 - **AviSynth+ plugin** with upstream's `TextSubMod` / `MaskSubMod`
   signatures, so existing scripts and avs2bdnxml keep working.
+- **VapourSynth plugin** (API 4) with upstream's `vsfm.TextSubMod`
+  signature: 8-bit output as upstream's, 9–16-bit YUV and RGB blended at
+  full precision, also 4:2:2 and Gray.
 - **BDN+XML output** through `vsfmrender`, byte-identical to what avs2bdnxml
   produces from this plugin's `MaskSubMod`.
 - **Embedded fonts** (`[Fonts]` attachments) work, through CSRI too.
@@ -104,6 +108,25 @@ MaskSubMod("subtitle.ass", 1920, 1080, 23.976, 3000)   # RGBA, for avs2bdnxml
 Any avs2bdnxml that loads scripts through AviSynth+ can use it: take the
 32-bit (`windows-x86`) build for a 32-bit avs2bdnxml or AviSynth+, the
 64-bit one otherwise.
+
+### VapourSynth
+
+The same library is a VapourSynth plugin (API 4, VapourSynth R55 or later),
+with the namespace and arguments of upstream's:
+
+```python
+import vapoursynth as vs
+core = vs.core
+core.std.LoadPlugin("vsfiltermod.dll")      # unless it is in the plugin folder
+clip = core.vsfm.TextSubMod(clip, "subtitle.ass")
+# TextSubMod(clip, file, charset=1, fps=..., vfr="timecodes.txt")
+```
+
+Clips may be YUV 4:2:0 or 4:2:2, Gray or RGB, 8 to 16 bits per sample.
+YUV420P8 and RGB24 come out exactly as from upstream's filter. Upstream drew
+10- and 16-bit clips as two 8-bit halves; here every depth is blended at its
+own precision, so `accurate=` is accepted but no longer needed. For 4:4:4,
+convert to RGB.
 
 ### vsfmrender
 
@@ -213,7 +236,10 @@ comes out the same on every machine.
 **DirectShow is gone.** The DirectShow filter, its property pages, the
 VobSub/DVB/HDMV/CC/USF/SSF/RealText parsers and the DirectX subpicture
 backends were removed; none is reachable from Aegisub, AviSynth or BDN+XML
-output. `VobSub()` and the VapourSynth plugin are not carried over.
+output. `VobSub()` is not carried over, in AviSynth or VapourSynth.
+
+**The VapourSynth plugin targets API 4** (upstream's used the retired API 3)
+and blends high bit depths properly instead of splitting samples in two.
 
 **Rendering does not depend on the machine.** DPI is pinned at 96 and
 charset-to-code-page mapping uses a fixed table. The one exception is glyph
@@ -241,7 +267,8 @@ does.
 ## Credits and licence
 
 Based on **VSFilter** by Gabest (Guliverkli) and **VSFilterMod**. The
-AviSynth+ C API headers in `include/avisynth` come from the AviSynth+ project.
+AviSynth+ C API headers in `include/avisynth` come from the AviSynth+ project;
+`include/vapoursynth/VapourSynth4.h` comes from VapourSynth (LGPL 2.1).
 
 Licensed under the [GNU General Public License v2.0 or later](LICENSE), as
 upstream.

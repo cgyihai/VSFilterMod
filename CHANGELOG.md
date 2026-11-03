@@ -2,6 +2,22 @@
 
 **English** | [简体中文](CHANGELOG.zh-CN.md)
 
+## Unreleased
+
+### VapourSynth
+
+- New: the plugin is also a VapourSynth plugin, `vsfm.TextSubMod(clip, file,
+  charset, fps, vfr, accurate)`, with the identifier, namespace and arguments
+  of upstream's, written against API 4 (VapourSynth R55 and later).
+- YUV420P8 and RGB24 render exactly as upstream's filter did. 9- to 16-bit
+  YUV 4:2:0 and 4:2:2, YUV422P8, Gray and high-bit-depth RGB are blended with
+  the same arithmetic at the clip's own precision, instead of upstream's
+  split into two 8-bit halves; `accurate=` is accepted and has no effect.
+- CI loads it into VapourSynth on Linux, macOS and Windows and checks the
+  output against one `tests/vsplugin/expected.txt`.
+- The AviSynth+ and VapourSynth entry points share one render path
+  (`src/vsfilter/sub_source.cpp`); AviSynth output is unchanged.
+
 ## 1.2.0
 
 ### Identical output on every platform

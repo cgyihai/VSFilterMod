@@ -175,7 +175,7 @@ version_rc = {}
 if host_system == 'windows'
     winmod = import('windows')
     foreach target, info : {
-        'plugin' : ['VSFilterMod subtitle renderer (CSRI and AviSynth+ plugin)', 'vsfiltermod', 'vsfiltermod.dll', 'VFT_DLL'],
+        'plugin' : ['VSFilterMod subtitle renderer (CSRI, AviSynth+ and VapourSynth plugin)', 'vsfiltermod', 'vsfiltermod.dll', 'VFT_DLL'],
         'renderer' : ['VSFilterMod BDN+XML renderer', 'vsfmrender', 'vsfmrender.exe', 'VFT_APP'],
     }
         rc_conf = configuration_data()
@@ -202,21 +202,29 @@ inc = include_directories('.', 'src', 'src/vsfilter', 'include')
 # whatever files it finds.
 # ---------------------------------------------------------------------------
 
-# The AviSynth+ entry points (TextSubMod / MaskSubMod) live in the same
-# library, as they did upstream, so one file serves both Aegisub (CSRI) and
-# AviSynth scripts such as avs2bdnxml's. AviSynth is not linked: its C API is
-# resolved at plugin init from the module that loaded us.
+# The AviSynth+ entry points (TextSubMod / MaskSubMod) and the VapourSynth one
+# (vsfm.TextSubMod) live in the same library, as upstream's did, so one file
+# serves Aegisub (CSRI), AviSynth scripts such as avs2bdnxml's, and
+# VapourSynth scripts. Neither frame server is linked: AviSynth's C API is
+# resolved at plugin init from the module that loaded us, and VapourSynth
+# hands its API to the entry point.
 plugin_src = files('src/vsfilter/csriapi.cpp')
 plugin_deps = []
-if get_option('avisynth')
+if get_option('avisynth') or get_option('vapoursynth')
     plugin_src += files(
-        'src/vsfilter/avisynth_plugin.cpp',
+        'src/vsfilter/sub_source.cpp',
         'src/vsfilter/vfr.cpp',
         'src/subpic/mem_subpic.cpp',
     )
+endif
+if get_option('avisynth')
+    plugin_src += files('src/vsfilter/avisynth_plugin.cpp')
     if host_system != 'windows'
         plugin_deps += cxx.find_library('dl', required : false)
     endif
+endif
+if get_option('vapoursynth')
+    plugin_src += files('src/vsfilter/vapoursynth_plugin.cpp')
 endif
 
 # On ELF platforms, symbols of static libraries linked into the plugin (the
@@ -300,6 +308,22 @@ if get_option('tests')
         endif
     endif
 
+    # Loads the plugin into VapourSynth and renders the consistency fixtures
+    # onto clips of every supported format: checks the output against
+    # tests/vsplugin/expected.txt and the formats against one another.
+    # Skipped where the vapoursynth Python module is not installed.
+    if get_option('vapoursynth')
+        py_vs = find_program('python3', 'python', required : false)
+        if py_vs.found()
+            test('vapoursynth', py_vs,
+                 args : [files('tests/vsplugin/run.py'),
+                         '--plugin', csri_lib.full_path(),
+                         '--out', meson.current_build_dir() / 'vsplugin'],
+                 depends : [csri_lib],
+                 timeout : 300)
+        endif
+    endif
+
     # Type-checks the POSIX branch of the compatibility layer while building
     # on Windows, by undefining _WIN32 after the system headers are in. It
     # cannot stand in for a real Linux or macOS build -- iconv, fontconfig,
@@ -324,5 +348,6 @@ summary({
     'target'         : host_system + '/' + host_cpu,
     'BDN+XML writer' : get_option('bdnxml'),
     'AviSynth+ entry': get_option('avisynth'),
+    'VapourSynth entry': get_option('vapoursynth'),
     'tests'          : get_option('tests'),
 }, section : 'VSFilterMod')
