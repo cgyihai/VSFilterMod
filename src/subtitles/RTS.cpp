@@ -152,6 +152,7 @@ void CWord::Paint(CPoint p, CPoint org)
 }
 
 #include "../compat/det_float.h"
+#include "../compat/det_math.h"
 
 /* The path is moved to screen space in single precision with the operations
  * of upstream's SSE code, one point at a time; see compat/det_float.h for why
@@ -174,12 +175,12 @@ void CWord::Transform(CPoint org)
 
     /* Upstream's angle conversion, 3.1415 and all; changing it would move
      * every rotated glyph. */
-    const float caz = (float)cos((3.1415 / 180) * m_style.fontAngleZ);
-    const float saz = (float)sin((3.1415 / 180) * m_style.fontAngleZ);
-    const float cax = (float)cos((3.1415 / 180) * m_style.fontAngleX);
-    const float sax = (float)sin((3.1415 / 180) * m_style.fontAngleX);
-    const float cay = (float)cos((3.1415 / 180) * m_style.fontAngleY);
-    const float say = (float)sin((3.1415 / 180) * m_style.fontAngleY);
+    const float caz = (float)vsfm::DetCos((3.1415 / 180) * m_style.fontAngleZ);
+    const float saz = (float)vsfm::DetSin((3.1415 / 180) * m_style.fontAngleZ);
+    const float cax = (float)vsfm::DetCos((3.1415 / 180) * m_style.fontAngleX);
+    const float sax = (float)vsfm::DetSin((3.1415 / 180) * m_style.fontAngleX);
+    const float cay = (float)vsfm::DetCos((3.1415 / 180) * m_style.fontAngleY);
+    const float say = (float)vsfm::DetSin((3.1415 / 180) * m_style.fontAngleY);
 
     const float xscale = (float)scalex;
     const float yscale = (float)scaley;
@@ -385,7 +386,7 @@ CText::CText(const STSStyle& style, CStringW str, int ktype, int kstart, int ken
                 return;
             }
 #ifdef _VSMOD // patch m007. symbol rotating
-            m_width += (int)(extent.cx * fabs(cos(t)) + extent.cy * fabs(sin(t)) + m_style.fontSpacing);
+            m_width += (int)(extent.cx * fabs(vsfm::DetCos(t)) + extent.cy * fabs(vsfm::DetSin(t)) + m_style.fontSpacing);
 #else
             m_width += extent.cx + (int)m_style.fontSpacing;
 #endif
@@ -401,7 +402,7 @@ CText::CText(const STSStyle& style, CStringW str, int ktype, int kstart, int ken
             return;
         }
 #ifdef _VSMOD // patch m007. symbol rotating
-        m_width += (int)(extent.cx * fabs(cos(t)) + extent.cy * fabs(sin(t)));
+        m_width += (int)(extent.cx * fabs(vsfm::DetCos(t)) + extent.cy * fabs(vsfm::DetSin(t)));
 #else
         m_width += extent.cx;
 #endif
@@ -2908,7 +2909,7 @@ double CRenderedTextSubtitle::CalcAnimation(double dst, double src, bool fAnimat
         if(m_time < s) dst = src;
         else if(s <= m_time && m_time < e)
         {
-            double t = pow(1.0 * (m_time - s) / (e - s), m_animAccel);
+            double t = vsfm::DetPow(1.0 * (m_time - s) / (e - s), m_animAccel);
             dst = (1 - t) * src + t * dst;
         }
 //		else dst = dst;
@@ -3296,8 +3297,8 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
                     int t1 = s->m_effects[k]->t[0];
                     int t2 = s->m_effects[k]->t[1];
 
-                    CPoint pr1(p1.x + cos(alp1) * r0.x, p1.y - sin(alp1) * r0.x);
-                    CPoint pr2(p2.x + cos(alp2) * r0.y, p2.y - sin(alp2) * r0.y);
+                    CPoint pr1(p1.x + vsfm::DetCos(alp1) * r0.x, p1.y - vsfm::DetSin(alp1) * r0.x);
+                    CPoint pr2(p2.x + vsfm::DetCos(alp2) * r0.y, p2.y - vsfm::DetSin(alp2) * r0.y);
 
                     if(t2 < t1)
                     {
@@ -3322,8 +3323,8 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 
                         p.x = (int)((1 - t) * p1.x + t * p2.x); // origin point
                         p.y = (int)((1 - t) * p1.y + t * p2.y);
-                        p.x += (int)(cos(alp) * rt);
-                        p.y -= (int)(sin(alp) * rt);
+                        p.x += (int)(vsfm::DetCos(alp) * rt);
+                        p.y -= (int)(vsfm::DetSin(alp) * rt);
                     }
                     else p = pr2;
                 }

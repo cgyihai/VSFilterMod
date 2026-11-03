@@ -138,6 +138,7 @@ vsfm_src = files(
     'src/compat/cpu_compat.cpp',
     'src/compat/det_float.cpp',
     'src/compat/num_compat.cpp',
+    'src/compat/det_math.cpp',
 
     'src/font/font_engine.cpp',
 
@@ -207,7 +208,8 @@ if get_option('tests')
          depends : [csri_lib])
 
     det_float_test = executable('det_float_test',
-        files('tests/det_float_test.cpp', 'src/compat/det_float.cpp'),
+        files('tests/det_float_test.cpp', 'src/compat/det_float.cpp',
+              'src/compat/det_math.cpp'),
         include_directories : inc,
         build_by_default : false)
 

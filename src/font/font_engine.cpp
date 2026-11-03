@@ -7,6 +7,7 @@
 #include "font_provider.h"
 #include "../compat/cstring_compat.h"
 #include "../compat/text_compat.h"
+#include "../compat/det_math.h"
 
 #if !defined(_WIN32)
 #include <dirent.h>
@@ -1746,8 +1747,8 @@ std::shared_ptr<FontFace> FontEngine::Build(const FontDesc& desc, FontMatch matc
         case 2700: impl->rotCos = 0.0;  impl->rotSin = -1.0; break;
         default: {
             const double rad = tenths * 3.14159265358979323846 / 1800.0;
-            impl->rotCos = std::cos(rad);
-            impl->rotSin = std::sin(rad);
+            impl->rotCos = vsfm::DetCos(rad);
+            impl->rotSin = vsfm::DetSin(rad);
         }
         }
     }

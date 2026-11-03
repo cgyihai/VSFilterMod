@@ -9,6 +9,7 @@
  */
 
 #include "compat/det_float.h"
+#include "compat/det_math.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -28,6 +29,7 @@ namespace {
 
 uint32_t Bits(float f) { uint32_t b; std::memcpy(&b, &f, 4); return b; }
 float Float(uint32_t b) { float f; std::memcpy(&f, &b, 4); return f; }
+uint64_t Bits64(double d) { uint64_t b; std::memcpy(&b, &d, 8); return b; }
 
 struct Golden { uint32_t in, out; };
 
@@ -95,6 +97,38 @@ int main()
                         c.in, vsfm::CvtTruncSs(c.in), c.out);
             ++failures;
         }
+    }
+
+    /* DetSin & co. must give these bits everywhere (see det_math.h). */
+    struct { double x; uint64_t sin, cos; } trig[] = {
+        { 0x1p-1, 0x3fdeaee8744b05f0ull, 0x3fec1528065b7d50ull },
+        { 0x1p+1, 0x3fed18f6ead1b446ull, 0xbfdaa22657537205ull },
+        { 0x1.0c1205bc01a37p-1, 0x3fdfffa9a336407eull, 0x3febb693d66d5508ull },
+        { -0x1.d333333333333p+2, 0xbfeb36c6dc1d7445ull, 0x3fe0d5a0848a01cbull },
+        { 0x1.34a456d5cfaadp+10, 0x3fb3fa00084ee3ddull, 0xbfefe7053dc31387ull },
+        { 0x1.e848p+19, 0xbfd6664b2568d867ull, 0x3fedf9df9906d32cull },
+    };
+    for (const auto& t : trig) {
+        if (Bits64(vsfm::DetSin(t.x)) != t.sin || Bits64(vsfm::DetCos(t.x)) != t.cos) {
+            std::printf("DetSin/DetCos(%a) differ from the reference\n", t.x);
+            ++failures;
+        }
+    }
+    struct { double x; uint64_t r; } exps[] = {
+        { -0x1p-1, 0x3fe368b2fc6f960aull }, { -0x1.88p+3, 0x3ed411fb0da07714ull },
+        { 0x1.8p+1, 0x403415e5bf6fb106ull }, { -0x1.5ep+9, 0x00d14f2b0fb9307full },
+    }, logs[] = {
+        { 0x1.3333333333333p-2, 0xbff34378fcbda721ull },
+        { 0x1.000001ad7f29bp+0, 0x3e7ad7f2847b6492ull },
+        { 0x1.81c8p+13, 0x4022d78e26ae18e8ull },
+    };
+    for (const auto& e : exps)
+        if (Bits64(vsfm::DetExp(e.x)) != e.r) { std::printf("DetExp(%a) differs\n", e.x); ++failures; }
+    for (const auto& l : logs)
+        if (Bits64(vsfm::DetLog(l.x)) != l.r) { std::printf("DetLog(%a) differs\n", l.x); ++failures; }
+    if (Bits64(vsfm::DetPow(0.37, 2.5)) != 0x3fb551616d6a40d3ull) {
+        std::printf("DetPow(0.37, 2.5) differs\n");
+        ++failures;
     }
 
     if (vsfm::MaxSs(Float(0x7fc00000u), 1000.0f) != 1000.0f ||
