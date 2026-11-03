@@ -22,6 +22,7 @@
 #include FT_TRUETYPE_TABLES_H
 #include FT_TRUETYPE_IDS_H
 #include FT_SFNT_NAMES_H
+#include FT_MULTIPLE_MASTERS_H
 
 #include <algorithm>
 #include <functional>
@@ -1207,6 +1208,9 @@ struct FontEngine::Impl
      * map to the one face they name. See CollectNames. */
     std::map<std::wstring, std::vector<MemoryFont> > memoryFamilies;
     std::map<std::wstring, MemoryFont> memoryFullNames;
+    /* The family keys in the order they were first registered: the order in
+     * which attached and font-directory fonts are tried for glyph fallback. */
+    std::vector<std::wstring> memoryFamilyOrder;
 
     const MemoryFont* FindMemoryFont(const std::wstring& lowerName, int weight, bool italic) const;
 
@@ -1412,53 +1416,135 @@ void CollectNames(FT_Face face, std::set<std::wstring>* families, std::set<std::
 
 } // namespace
 
+namespace {
+
+/* The weight and slant a face presents: OS/2 usWeightClass, or FreeType's
+ * style flags when that is missing. Caller holds the library lock. */
+void FaceStyle(FT_Face f, int* weight, bool* italic)
+{
+    const TT_OS2* os2 = (const TT_OS2*)FT_Get_Sfnt_Table(f, FT_SFNT_OS2);
+    *weight = (os2 && os2->usWeightClass >= 1 && os2->usWeightClass <= 1000)
+            ? (int)os2->usWeightClass
+            : ((f->style_flags & FT_STYLE_FLAG_BOLD) ? FW_BOLD : FW_NORMAL);
+    *italic = (f->style_flags & FT_STYLE_FLAG_ITALIC) != 0;
+}
+
+/* A variable font's named instance carries the default instance's OS/2
+ * table; its weight is its 'wght' coordinate. */
+int InstanceWeight(FT_Library lib, FT_Face f, int fallback)
+{
+    FT_MM_Var* mm = nullptr;
+    if (FT_Get_MM_Var(f, &mm) != 0 || !mm) return fallback;
+
+    int weight = fallback;
+    std::vector<FT_Fixed> coords(mm->num_axis);
+    if (mm->num_axis && FT_Get_Var_Design_Coordinates(f, mm->num_axis, coords.data()) == 0) {
+        for (FT_UInt a = 0; a < mm->num_axis; ++a)
+            if (mm->axis[a].tag == FT_MAKE_TAG('w', 'g', 'h', 't'))
+                weight = (int)((coords[a] + 0x8000) >> 16);
+    }
+#if FREETYPE_MAJOR > 2 || (FREETYPE_MAJOR == 2 && FREETYPE_MINOR >= 9)
+    FT_Done_MM_Var(lib, mm);
+#else
+    (void)lib;
+    std::free(mm);
+#endif
+    return weight;
+}
+
+std::wstring Widen(const char* s)
+{
+    std::wstring out;
+    if (s) for (; *s; ++s) out += (wchar_t)(unsigned char)*s;
+    return out;
+}
+
+bool IsRibbiStyle(const std::wstring& style)
+{
+    std::wstring s;
+    for (wchar_t c : style) s += (wchar_t)std::towlower((wint_t)c);
+    return s == L"regular" || s == L"bold" || s == L"italic" || s == L"bold italic";
+}
+
+} // namespace
+
 int FontEngine::RegisterFaces(const unsigned char* bytes, size_t len,
                               const std::shared_ptr<FontData>& keep,
                               const std::string& path)
 {
-    /* Register every face in the blob: a .ttc carries several. */
-    int added = 0;
-    long faceCount = 1;
-
-    for (long i = 0; i < faceCount; ++i) {
+    struct Entry
+    {
+        Impl::MemoryFont font;
         std::set<std::wstring> families, fullNames;
-        Impl::MemoryFont mf;
-        mf.data = keep;
-        mf.path = path;
-        mf.faceIndex = (int)i;
+    };
+    std::vector<Entry> entries;
 
-        {
-            std::lock_guard<std::mutex> g(Library::Get().lock);
+    {
+        std::lock_guard<std::mutex> g(Library::Get().lock);
+        FT_Library lib = Library::Get().ft;
+
+        /* Every face in the blob -- a .ttc carries several -- and every named
+         * instance of a variable one. */
+        long faceCount = 1;
+        for (long i = 0; i < faceCount; ++i) {
             FT_Face probe = nullptr;
-            if (FT_New_Memory_Face(Library::Get().ft, bytes, (FT_Long)len, i, &probe) != 0)
-                break;
-
+            if (FT_New_Memory_Face(lib, bytes, (FT_Long)len, i, &probe) != 0) break;
             if (i == 0) faceCount = probe->num_faces > 0 ? probe->num_faces : 1;
 
-            CollectNames(probe, &families, &fullNames);
-
-            const TT_OS2* os2 = (const TT_OS2*)FT_Get_Sfnt_Table(probe, FT_SFNT_OS2);
-            mf.weight = (os2 && os2->usWeightClass >= 1 && os2->usWeightClass <= 1000)
-                      ? (int)os2->usWeightClass
-                      : ((probe->style_flags & FT_STYLE_FLAG_BOLD) ? FW_BOLD : FW_NORMAL);
-            mf.italic = (probe->style_flags & FT_STYLE_FLAG_ITALIC) != 0;
-
+            Entry base;
+            base.font.data = keep;
+            base.font.path = path;
+            base.font.faceIndex = (int)i;
+            CollectNames(probe, &base.families, &base.fullNames);
+            FaceStyle(probe, &base.font.weight, &base.font.italic);
+            const long instances = (probe->face_flags & FT_FACE_FLAG_MULTIPLE_MASTERS)
+                                 ? (probe->style_flags >> 16) : 0;
+            const std::wstring family = Widen(probe->family_name);
             FT_Done_Face(probe);
-        }
 
-        if (families.empty() && fullNames.empty()) continue;
+            if (base.families.empty() && base.fullNames.empty()) continue;
+            entries.push_back(base);
 
-        std::lock_guard<std::mutex> g(m_impl->lock);
-        for (const std::wstring& name : families) {
-            m_impl->memoryFamilies[ToLower(name)].push_back(mf);
-            FontProvider::Get().AddMemoryFamily(name);
+            /* GDI lists a variable font's named instances as fonts of their
+             * own: Regular, Bold, Italic and Bold Italic under the family,
+             * any other ("Light", "Black") as the family "<family> <style>",
+             * as a static font family of that many weights would be. */
+            for (long n = 1; n <= instances && !family.empty(); ++n) {
+                FT_Face inst = nullptr;
+                const long index = (n << 16) | i;
+                if (FT_New_Memory_Face(lib, bytes, (FT_Long)len, index, &inst) != 0) continue;
+
+                Entry e;
+                e.font = base.font;
+                e.font.faceIndex = (int)index;
+                e.font.italic = (inst->style_flags & FT_STYLE_FLAG_ITALIC) != 0;
+                e.font.weight = InstanceWeight(lib, inst, base.font.weight);
+                const std::wstring style = Widen(inst->style_name);
+                FT_Done_Face(inst);
+
+                e.families = base.families;
+                if (!style.empty()) {
+                    e.fullNames.insert(family + L" " + style);
+                    if (!IsRibbiStyle(style)) e.families = { family + L" " + style };
+                }
+                entries.push_back(e);
+            }
         }
-        for (const std::wstring& name : fullNames)
-            m_impl->memoryFullNames.emplace(ToLower(name), mf);   // first face wins
-        ++added;
     }
 
-    return added;
+    std::lock_guard<std::mutex> g(m_impl->lock);
+    for (const Entry& e : entries) {
+        for (const std::wstring& name : e.families) {
+            const std::wstring key = ToLower(name);
+            std::vector<Impl::MemoryFont>& faces = m_impl->memoryFamilies[key];
+            if (faces.empty()) m_impl->memoryFamilyOrder.push_back(key);
+            faces.push_back(e.font);
+            FontProvider::Get().AddMemoryFamily(name);
+        }
+        for (const std::wstring& name : e.fullNames)
+            m_impl->memoryFullNames.emplace(ToLower(name), e.font);   // first face wins
+    }
+    return (int)entries.size();
 }
 
 bool FontEngine::AddMemoryFont(const void* data, size_t len)
@@ -1645,6 +1731,7 @@ void FontEngine::ClearMemoryFonts()
     std::lock_guard<std::mutex> g(m_impl->lock);
     m_impl->memoryFamilies.clear();
     m_impl->memoryFullNames.clear();
+    m_impl->memoryFamilyOrder.clear();
 }
 
 std::shared_ptr<FontFace> FontEngine::OpenFont(const FontDesc& desc)
@@ -1995,6 +2082,26 @@ std::shared_ptr<FontFace> FontEngine::FindFallback(const FontDesc& base, int bas
         }
         *glyph = gi;
         return f;
+    }
+
+    /* Then the fonts the script attached and those from a font directory, in
+     * the order they were registered: a choice that is the same on every
+     * machine, unlike the platform's own fallback below. Sized at the base's
+     * em, as that fallback is. */
+    std::vector<std::wstring> supplied;
+    {
+        std::lock_guard<std::mutex> g(m_impl->lock);
+        supplied = m_impl->memoryFamilyOrder;
+    }
+    for (const std::wstring& family : supplied) {
+        if (family == baseFamily) continue;
+        d.faceName = (vertical ? L"@" : L"") + family;
+        d.height = base.height > 0 ? -baseEm : base.height;
+        std::shared_ptr<FontFace> f = OpenExactFont(d);
+        if (const unsigned gi = covers(f)) {
+            *glyph = gi;
+            return f;
+        }
     }
 
     /* Last resort: whatever the platform itself would fall back to. */

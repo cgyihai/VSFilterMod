@@ -3505,6 +3505,11 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 
                 fPosOverride = true;
             }
+            /* Upstream VSFilterMod inserted the case below in front of the
+             * break that ended this one, so a Scroll effect fell through
+             * into it and turned the line's \clip into a "moving" vector
+             * clip placed at the scroll parameters. */
+            break;
 #ifdef _VSMOD // patch m006. moveable vector clip
             case EF_VECTCLP:
             {

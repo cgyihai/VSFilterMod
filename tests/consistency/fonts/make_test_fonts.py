@@ -17,6 +17,14 @@ Each face draws A, B and C as different geometric shapes, so a wrong choice
                       what GDI lists, typographic family (ID 16) "VSFM Test",
                       which is what FreeType reports; weight 900.
                       A: octagon, B: diamond, C: cross.
+    VSFMVar           a variable font, family "VSFM Var", one 'wght' axis
+                      (100-900) and named instances Regular (400), Bold (700)
+                      and Black (900). A is a bar whose width follows the
+                      weight, so each instance draws a different A.
+    VSFMFallback      family "VSFM Fallback", with a glyph only for
+                      U+F0041, a supplementary private-use code point no
+                      installed font covers: drawing it at all shows that
+                      glyph fallback reached an attached font.
 
 The generated files are committed; rerun this only to change them:
     python3 make_test_fonts.py        (needs fontTools)
@@ -29,6 +37,7 @@ import os
 
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
+from fontTools.ttLib.tables._g_v_a_r import TupleVariation
 from fontTools.ttLib.tables._n_a_m_e import NameRecord
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -121,6 +130,65 @@ def build(style, names, weight, bold, out):
     fb.save(os.path.join(HERE, out))
 
 
+def build_variable():
+    fb = FontBuilder(UPM, isTTF=True)
+    order = [".notdef", "space", "A"]
+    fb.setupGlyphOrder(order)
+    fb.setupCharacterMap({0x20: "space", 0x41: "A"})
+    fb.setupGlyf({
+        ".notdef": glyph(lambda p: rect(p, 100, 0, 700, 700)),
+        "space": glyph(None),
+        "A": glyph(lambda p: rect(p, 350, 0, 450, 650)),     # 4 points
+    })
+    fb.setupHorizontalMetrics({".notdef": (ADVANCE, 0), "space": (400, 0), "A": (ADVANCE, 0)})
+    fb.setupHorizontalHeader(ascent=800, descent=-200)
+    fb.setupOS2(usWeightClass=400, sTypoAscender=800, sTypoDescender=-200,
+                sTypoLineGap=0, usWinAscent=800, usWinDescent=200,
+                fsSelection=0x40, achVendID="VSFM")
+    fb.setupPost()
+    fb.setupHead(unitsPerEm=UPM)
+    fb.setupNameTable({"familyName": "VSFM Var", "styleName": "Regular",
+                       "fullName": "VSFM Var Regular", "psName": "VSFMVar-Regular",
+                       "uniqueFontIdentifier": "VSFMVar-Regular", "version": "Version 1.0"})
+    fb.setupFvar(
+        axes=[("wght", 100, 400, 900, "Weight")],
+        instances=[
+            {"stylename": "Regular", "location": {"wght": 400}},
+            {"stylename": "Bold", "location": {"wght": 700}},
+            {"stylename": "Black", "location": {"wght": 900}},
+        ])
+    # rect(350, 0, 450, 650) draws (350,0) (350,650) (450,650) (450,0); at
+    # full weight the bar widens to 100..700. Four phantom points follow.
+    wider = [(-250, 0), (-250, 0), (250, 0), (250, 0), (0, 0), (0, 0), (0, 0), (0, 0)]
+    fb.setupGvar({"A": [TupleVariation({"wght": (0, 1.0, 1.0)}, wider)]})
+    fb.save(os.path.join(HERE, "VSFMVar.ttf"))
+
+
+def build_fallback():
+    fb = FontBuilder(UPM, isTTF=True)
+    order = [".notdef", "space", "star"]
+    fb.setupGlyphOrder(order)
+    fb.setupCharacterMap({0x20: "space", 0xF0041: "star"})
+    fb.setupGlyf({
+        ".notdef": glyph(lambda p: rect(p, 100, 0, 700, 700)),
+        "space": glyph(None),
+        "star": glyph(lambda p: poly(p, [(400, 650), (480, 400), (750, 400), (530, 250),
+                                         (620, 0), (400, 150), (180, 0), (270, 250),
+                                         (50, 400), (320, 400)])),
+    })
+    fb.setupHorizontalMetrics({g: (ADVANCE, 0) for g in order})
+    fb.setupHorizontalHeader(ascent=800, descent=-200)
+    fb.setupOS2(usWeightClass=400, sTypoAscender=800, sTypoDescender=-200,
+                sTypoLineGap=0, usWinAscent=800, usWinDescent=200,
+                fsSelection=0x40, achVendID="VSFM")
+    fb.setupPost()
+    fb.setupHead(unitsPerEm=UPM)
+    fb.setupNameTable({"familyName": "VSFM Fallback", "styleName": "Regular",
+                       "fullName": "VSFM Fallback", "psName": "VSFMFallback",
+                       "uniqueFontIdentifier": "VSFMFallback", "version": "Version 1.0"})
+    fb.save(os.path.join(HERE, "VSFMFallback.ttf"))
+
+
 def main():
     build("Regular", {
         "en": {"familyName": "VSFM Test", "styleName": "Regular",
@@ -143,6 +211,9 @@ def main():
                "fullName": "VSFM Test Heavy", "psName": "VSFMTest-Heavy",
                "uniqueFontIdentifier": "VSFMTest-Heavy", "version": "Version 1.0"},
     }, 900, False, "VSFMTest-Heavy.ttf")
+
+    build_variable()
+    build_fallback()
 
 
 if __name__ == "__main__":

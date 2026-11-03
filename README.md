@@ -197,7 +197,11 @@ GDI would find them by — the Windows family name ("Source Han Sans SC
 Medium"), the typographic family, the full name, and the localized names of
 any language, including GBK/Big5/Shift-JIS-encoded names in older CJK fonts —
 and when several attached faces share a family, the one matching the
-requested weight and slant is used, as GDI picks it.
+requested weight and slant is used, as GDI picks it. Named instances of an
+attached variable font are listed the way GDI lists them ("Family Black").
+A character none of the usual fallback fonts has is looked up in the attached
+fonts (and a `--fontdir` folder) before the platform's own fallback, so it
+comes out the same on every machine.
 
 **DirectShow is gone.** The DirectShow filter, its property pages, the
 VobSub/DVB/HDMV/CC/USF/SSF/RealText parsers and the DirectX subpicture
