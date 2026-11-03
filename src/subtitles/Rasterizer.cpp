@@ -917,6 +917,16 @@ static inline DWORD safe_subtract(DWORD a, DWORD b)
     return (hi << 16) | lo;
 }
 
+/* The column at which a karaoke colour switch happens, clamped to the row.
+ * Upstream clamped it only from above; a switch point far to the left (a
+ * \bord of 2^31, say) made the second-colour loop start at a negative
+ * column and read and write outside the overlay and the frame. */
+static inline int SwitchColumn(const RasterizerNfo& rnfo)
+{
+    const int64_t gran = (int64_t)(int)rnfo.sw[3] + 1 - rnfo.xo;
+    return (int)std::max<int64_t>(0, std::min<int64_t>(gran, rnfo.w));
+}
+
 void Rasterizer::Draw_noAlpha_spFF_Body(RasterizerNfo& rnfo)
 {
     int h = rnfo.h;
@@ -974,7 +984,7 @@ void Rasterizer::Draw_noAlpha_sp_Body(RasterizerNfo& rnfo)
     // xo is the offset (usually negative) we have moved into the image
     // So if we have passed the switchpoint (?) switch to another colour
     // (So switchpts stores both colours *and* coordinates?)
-    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = SwitchColumn(rnfo);
     int color2 = rnfo.sw[2];
     while(h--)
     {
@@ -995,7 +1005,7 @@ void Rasterizer::Draw_noAlpha_sp_noBody(RasterizerNfo& rnfo)
 
     BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
-    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = SwitchColumn(rnfo);
     int color2 = rnfo.sw[2];
     while(h--)
     {
@@ -1080,7 +1090,7 @@ void Rasterizer::Draw_Alpha_sp_Body(RasterizerNfo& rnfo)
     BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
 
-    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = SwitchColumn(rnfo);
     int color2 = rnfo.sw[2];
     while(h--)
     {
@@ -1115,7 +1125,7 @@ void Rasterizer::Draw_Alpha_sp_noBody(RasterizerNfo& rnfo)
     BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
 
-    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = SwitchColumn(rnfo);
     int color2 = rnfo.sw[2];
     while(h--)
     {
@@ -1188,7 +1198,7 @@ void Rasterizer::Draw_Grad_noAlpha_sp_Body(RasterizerNfo& rnfo)
 
     int h = rnfo.h;
     int w = rnfo.w;
-    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = SwitchColumn(rnfo);
     while(h--)
     {
         for(int wt = 0; wt < gran; ++wt)
@@ -1210,7 +1220,7 @@ void Rasterizer::Draw_Grad_noAlpha_sp_noBody(RasterizerNfo& rnfo)
 
     int h = rnfo.h;
     int w = rnfo.w;
-    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = SwitchColumn(rnfo);
     while(h--)
     {
         for(int wt = 0; wt < gran; ++wt)
@@ -1275,7 +1285,7 @@ void Rasterizer::Draw_Grad_Alpha_sp_Body(RasterizerNfo& rnfo)
 
     int h = rnfo.h;
     int w = rnfo.w;
-    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = SwitchColumn(rnfo);
     while(h--)
     {
         for(int wt = 0; wt < gran; ++wt)
@@ -1298,7 +1308,7 @@ void Rasterizer::Draw_Grad_Alpha_sp_noBody(RasterizerNfo& rnfo)
 
     int h = rnfo.h;
     int w = rnfo.w;
-    int gran = std::min((int)rnfo.sw[3] + 1 - rnfo.xo, rnfo.w);
+    int gran = SwitchColumn(rnfo);
     while(h--)
     {
         for(int wt = 0; wt < gran; ++wt)
@@ -1338,32 +1348,39 @@ CRect Rasterizer::Draw(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, int x
     // Remember that all subtitle coordinates are specified in 1/8 pixels
     // (x+4)>>3 rounds to nearest whole pixel.
     // ??? What is xsub, ysub, mOffsetX and mOffsetY ?
-    int x = (xsub + mOffsetX + 4) >> 3;
-    int y = (ysub + mOffsetY + 4) >> 3;
-    int w = mOverlayWidth;
-    int h = mOverlayHeight;
-    int xo = 0, yo = 0;
+    //
+    // Clipped in 64 bits: with extreme positions or borders (\bord2147483647)
+    // the 32-bit sums wrapped, a glyph far off screen passed the tests below
+    // and was blitted outside the frame. Once clipped, every value lies
+    // within the frame and the overlay and fits an int again.
+    int64_t x64 = ((int64_t)xsub + mOffsetX + 4) >> 3;
+    int64_t y64 = ((int64_t)ysub + mOffsetY + 4) >> 3;
+    int64_t w64 = mOverlayWidth;
+    int64_t h64 = mOverlayHeight;
+    int64_t xo64 = 0, yo64 = 0;
 
-    int yBeforeClip = y;
+    const int yBeforeClip = (int)std::max<int64_t>(INT_MIN, std::min<int64_t>(INT_MAX, y64));
 
-    // Again, limiting?
-    if(x < r.left)
+    if(x64 < r.left)
     {
-        xo = r.left - x;
-        w -= r.left - x;
-        x = r.left;
+        xo64 = r.left - x64;
+        w64 -= xo64;
+        x64 = r.left;
     }
-    if(y < r.top)
+    if(y64 < r.top)
     {
-        yo = r.top - y;
-        h -= r.top - y;
-        y = r.top;
+        yo64 = r.top - y64;
+        h64 -= yo64;
+        y64 = r.top;
     }
-    if(x + w > r.right) w = r.right - x;
-    if(y + h > r.bottom) h = r.bottom - y;
+    if(x64 + w64 > r.right) w64 = r.right - x64;
+    if(y64 + h64 > r.bottom) h64 = r.bottom - y64;
 
     // Check if there's actually anything to render
-    if(w <= 0 || h <= 0) return(bbox);
+    if(w64 <= 0 || h64 <= 0 || !mpOverlayBuffer) return(bbox);
+
+    int x = (int)x64, y = (int)y64, w = (int)w64, h = (int)h64;
+    int xo = (int)xo64, yo = (int)yo64;
 
     bbox.SetRect(x, y, x + w, y + h);
     bbox &= CRect(0, 0, spd.w, spd.h);
