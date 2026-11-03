@@ -106,8 +106,8 @@ macOS 上可以从终端启动 Aegisub，查看加载器的警告信息。
 | --- | --- | --- | --- |
 | Linux x86_64 | GCC | fontconfig | apt |
 | Linux aarch64 | GCC | fontconfig | apt |
-| macOS arm64（`macos-15`） | Clang | CoreText | Homebrew |
-| macOS x86_64（`macos-15-intel`） | Clang | CoreText | Homebrew |
+| macOS arm64（`macos-15`） | Clang | CoreText | Meson 子项目，静态链接 |
+| macOS x86_64（`macos-15-intel`） | Clang | CoreText | Meson 子项目，静态链接 |
 | Windows x86_64（MSVC） | MSVC | DirectWrite | Meson 子项目，全部静态链接 |
 | Windows x86_64（MinGW） | GCC | DirectWrite | MSYS2 |
 

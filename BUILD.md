@@ -114,8 +114,8 @@ terminal to see the loader's warnings.
 | --- | --- | --- | --- |
 | Linux x86_64 | GCC | fontconfig | apt |
 | Linux aarch64 | GCC | fontconfig | apt |
-| macOS arm64 (`macos-15`) | Clang | CoreText | Homebrew |
-| macOS x86_64 (`macos-15-intel`) | Clang | CoreText | Homebrew |
+| macOS arm64 (`macos-15`) | Clang | CoreText | Meson subprojects, static |
+| macOS x86_64 (`macos-15-intel`) | Clang | CoreText | Meson subprojects, static |
 | Windows x86_64 (MSVC) | MSVC | DirectWrite | Meson subprojects, all static |
 | Windows x86_64 (MinGW) | GCC | DirectWrite | MSYS2 |
 

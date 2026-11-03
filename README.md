@@ -59,8 +59,10 @@ of any commit are under the run's *Artifacts* on the
 | macOS Apple Silicon | `vsfiltermod-macos-arm64` | `vsfiltermod.dylib`, `vsfmrender` |
 | macOS Intel | `vsfiltermod-macos-x86_64` | `vsfiltermod.dylib`, `vsfmrender` |
 
-The Linux and macOS builds link against the system's FreeType, libpng and
-fontconfig (Linux) — install those from your package manager or Homebrew.
+The macOS builds are self-contained, like the Windows one: FreeType and
+libpng are linked in, at the same version as on Windows. The Linux builds use
+the system's FreeType, libpng and fontconfig — install those from your package
+manager.
 
 ## Usage
 

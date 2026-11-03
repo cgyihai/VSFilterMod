@@ -88,13 +88,32 @@ jobs:
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: |
-          brew install pkg-config freetype libpng
-          echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/share/pkgconfig" >> "$GITHUB_ENV"
+        run: brew install pkg-config
 
-      - name: Configure (Unix)
-        if: ${{ !matrix.windows }}
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
         run: meson setup build
+
+      # FreeType and libpng are built from the same pinned subprojects as on
+      # Windows and linked statically, so the dylib needs nothing beyond what
+      # macOS itself ships -- no Homebrew on the user's machine -- and uses
+      # the same FreeType version as the Windows build. (On Linux the system
+      # FreeType is used: fontconfig and the host application load it anyway,
+      # and a second copy inside the plugin could have its symbols bound to
+      # theirs.)
+      - name: Configure (macOS)
+        if: runner.os == 'macOS'
+        run: >
+          meson setup build
+          --force-fallback-for=freetype2,libpng
+          -Dfreetype2:default_library=static
+          -Dlibpng:default_library=static
+          -Dfreetype2:harfbuzz=disabled
+          -Dfreetype2:brotli=disabled
+          -Dfreetype2:bzip2=disabled
+          -Dfreetype2:png=disabled
+          -Dfreetype2:zlib=internal
+          -Dfreetype2:tests=disabled
 
       # freetype, libpng and zlib come from subprojects here, all linked
       # statically, and b_vscrt pulls in the CRT statically too. The result is
@@ -149,6 +168,19 @@ jobs:
           "${{ matrix.renderer }}" --quiet --size 1280x720 --fps 23.976 \
             tests/smoke.ass out/smoke.xml
           python tests/check_bdnxml.py --min-events 5 out/smoke.xml
+
+      - name: Check the macOS build is self-contained
+        if: runner.os == 'macOS'
+        run: |
+          for f in "${{ matrix.plugin }}" "${{ matrix.renderer }}"; do
+            otool -L "$f"
+            # Line 1 is the file itself; a dylib then lists its own install name.
+            if otool -L "$f" | tail -n +2 | grep -v -F "$(basename "$f")" \
+                | grep -v -E '^[[:space:]]*(/usr/lib/|/System/Library/|@rpath/|@loader_path/|@executable_path/)'; then
+              echo "::error::$f links a library outside the OS"
+              exit 1
+            fi
+          done
 
       - name: Report exported symbols
         run: |

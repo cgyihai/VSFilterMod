@@ -56,8 +56,9 @@ Z 坐标、竖向间距等。
 | macOS Apple Silicon | `vsfiltermod-macos-arm64` | `vsfiltermod.dylib`、`vsfmrender` |
 | macOS Intel | `vsfiltermod-macos-x86_64` | `vsfiltermod.dylib`、`vsfmrender` |
 
-Linux 和 macOS 版本链接系统的 FreeType、libpng，Linux 还需要 fontconfig，
-请用包管理器或 Homebrew 安装。
+macOS 版本与 Windows 版本一样是自包含的：FreeType 和 libpng 已静态链接进去，
+版本与 Windows 版相同。Linux 版本使用系统的 FreeType、libpng 和 fontconfig，
+请用包管理器安装。
 
 ## 使用方法
 
