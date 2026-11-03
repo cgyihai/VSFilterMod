@@ -37,18 +37,23 @@ meson setup build -Dbdnxml=false              # plugin only
 meson setup build -Dtests=false
 ```
 
-### Apple Silicon and ARM Linux
+### Identical output on every platform
 
-The rasterizer's blend kernels are written against SSE2. On AArch64 they can go
-through [sse2neon](https://github.com/DLTcollab/sse2neon), a single header:
+Rendering is plain, portable C++: no code path depends on SIMD support, the
+CPU vendor or the compiler. The build passes `-ffp-contract=off` so that GCC
+and Clang never fuse `a * b + c` into an FMA instruction (which every AArch64
+CPU has, and which rounds differently). Do not build with `-ffast-math`,
+`/fp:fast` or `-ffp-contract=fast`: the `render-consistency` test will fail.
+
+`meson test` includes that test. It renders `tests/consistency/*.ass` with the
+bundled Caladea font embedded, so no installed font is involved, and requires
+every event's pixels to equal `tests/consistency/expected.txt` — the same file
+on every platform. After an intended change to rendering, regenerate it and
+commit it with the change:
 
 ```bash
-curl -LO https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h
-meson setup build -Dcpp_args=-I$PWD
+python3 tests/consistency/run.py --renderer build/src/bdnxml/vsfmrender --out build/consistency --update
 ```
-
-Without it the build still works and renders identically — it just uses the
-scalar kernels, which are slower. Meson prints which one it picked.
 
 ## Installing into Aegisub
 
@@ -108,17 +113,22 @@ terminal to see the loader's warnings.
 | Job | Toolchain | Font backend | Dependencies |
 | --- | --- | --- | --- |
 | Linux x86_64 | GCC | fontconfig | apt |
-| Linux aarch64 | GCC | fontconfig | apt + sse2neon |
-| macOS arm64 (`macos-15`) | Clang | CoreText | Homebrew + sse2neon |
+| Linux aarch64 | GCC | fontconfig | apt |
+| macOS arm64 (`macos-15`) | Clang | CoreText | Homebrew |
 | macOS x86_64 (`macos-15-intel`) | Clang | CoreText | Homebrew |
 | Windows x86_64 (MSVC) | MSVC | DirectWrite | Meson subprojects, all static |
 | Windows x86_64 (MinGW) | GCC | DirectWrite | MSYS2 |
 
 Each job runs the `csri-abi` test — which loads the plugin the way Aegisub's
-loader does and renders through it — then renders `tests/smoke.ass` to BDN+XML
+loader does and renders through it — and the `render-consistency` test, which
+requires the job's rendering of `tests/consistency/*.ass` to match
+`expected.txt` pixel for pixel. It then renders `tests/smoke.ass` to BDN+XML
 and validates the result with `tests/check_bdnxml.py`. That validator rejects
 a fully transparent image, so a platform whose font lookup silently returns
 nothing fails the build instead of producing empty subtitles.
+
+A final `consistency` job collects every platform's results and prints which
+platforms agree, and on which events they do not.
 
 Two notes:
 

@@ -1,11 +1,9 @@
 /*
  *  VSFilterMod cross-platform port -- runtime CPU feature detection.
  *
- *  Replaces dsutil/vd.h's CCpuID. Rasterizer::Draw branches on g_cpuid at
- *  runtime, so the flag has to reflect the machine, not the compiler flags.
- *
- *  On AArch64 the SSE2 paths are compiled through sse2neon (see simd_compat.h),
- *  so the flag is reported as set: the "SSE2" branch is the one we want there.
+ *  Replaces dsutil/vd.h's CCpuID. Only the YUY2 blend in mem_subpic.cpp
+ *  still consults it, and its SSE2 and C kernels agree bit for bit, so the
+ *  answer affects speed, never output. Off x86 no flag is set.
  */
 
 #pragma once

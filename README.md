@@ -143,8 +143,14 @@ Measured on Windows against upstream VSFilterMod's CSRI plugin: the overlap
 Event timing follows `MaskSubMod`'s clock exactly, single-precision rounding
 included, so BDN+XML events start and end on the same frames as upstream's.
 The remaining differences are antialiasing at glyph edges, a fraction of a
-pixel. Linux and macOS run the same code; there, differences come from which
-font files are installed.
+pixel.
+
+**Across platforms the output is identical, not merely close.** Given the
+same font files, every build — Windows, Linux and macOS, x86-64 and ARM —
+produces the same pixels: there is no SIMD-, CPU- or compiler-dependent code
+path, and CI renders `tests/consistency/` on every platform and fails if any
+pixel differs from the shared `expected.txt`. What can still differ between
+machines is which fonts are installed (see *Known issues*).
 
 ## How this differs from upstream
 
@@ -191,8 +197,10 @@ does.
 - A face name GDI does not know, such as `@Arial`, makes GDI substitute
   SimSun for the whole line, Latin included; here the Latin stays in the
   style face.
-- The Linux and macOS builds are compiled and smoke-tested by CI but have
-  not been compared against upstream pixel by pixel.
+- The Linux and macOS builds render bit-for-bit like the Windows build (CI
+  checks this), but when a script names a font the machine does not have,
+  each platform substitutes its own. Embed the fonts in the script
+  (`[Fonts]`) to rule that out.
 
 ## Credits and licence
 

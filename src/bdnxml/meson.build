@@ -3,7 +3,7 @@
 
 vsfmrender = executable('vsfmrender',
     vsfm_src + files('bdnxml_writer.cpp', 'main.cpp'),
-    include_directories : [inc] + sse2neon_inc,
+    include_directories : inc,
     dependencies : deps,
     # The CLI needs its own symbols, unlike the plugin.
     gnu_symbol_visibility : 'default',

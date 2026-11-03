@@ -2,18 +2,19 @@
  *  VSFilterMod cross-platform port -- deterministic single-precision helpers.
  *
  *  CWord::Transform used to have two implementations: an SSE one (single
- *  precision, with an approximate reciprocal) taken on x86 and on AArch64
- *  when sse2neon was found, and a double-precision C one taken otherwise.
- *  They disagree by whole pixels under \distort and draw \rnd jitter in a
- *  different order, so the same script rendered differently depending on
- *  the CPU and on whether one optional header was installed.
+ *  precision, with an approximate reciprocal) taken on x86, and on AArch64
+ *  when the sse2neon header was found, and a double-precision C one taken
+ *  otherwise. They disagree by whole pixels under \distort and draw \rnd
+ *  jitter in a different order, so the same script rendered differently
+ *  depending on the CPU and on whether one optional header was installed.
  *
  *  There is now a single scalar implementation that performs exactly the SSE
  *  path's IEEE operations, in the same order, on plain floats. Additions,
  *  multiplications, divisions and comparisons are correctly rounded on every
  *  platform we build for, so the result is the same everywhere -- provided
  *  the compiler does not fuse a * b + c (meson.build passes
- *  -ffp-contract=off; the pragmas below cover MSVC and Clang as well) and
+ *  -ffp-contract=off, and RTS.cpp turns contraction off by pragma for MSVC
+ *  and Clang as well) and
  *  float arithmetic is not evaluated in extended precision (x87; the 32-bit
  *  x86 build is compiled for SSE math).
  *

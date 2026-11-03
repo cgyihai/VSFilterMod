@@ -38,14 +38,12 @@ jobs:
             artifact: linux-aarch64
             plugin: build/vsfiltermod.so
             renderer: build/src/bdnxml/vsfmrender
-            arm: true
 
           - name: macOS arm64 (Clang)
             os: macos-15
             artifact: macos-arm64
             plugin: build/vsfiltermod.dylib
             renderer: build/src/bdnxml/vsfmrender
-            arm: true
 
           # macos-13 was retired; macos-15-intel is GitHub's x86_64 image.
           - name: macOS x86_64 (Clang)
@@ -94,20 +92,9 @@ jobs:
           brew install pkg-config freetype libpng
           echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/share/pkgconfig" >> "$GITHUB_ENV"
 
-      # The SSE2 blend kernels run through sse2neon on AArch64. It is optional
-      # -- without it the scalar kernels are used and output is identical, just
-      # slower -- but the published artefacts should have it.
-      - name: Fetch sse2neon (AArch64)
-        if: matrix.arm
-        run: |
-          mkdir -p thirdparty
-          curl -fsSL --retry 3 -o thirdparty/sse2neon.h \
-            https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h
-          echo "VSFM_EXTRA_ARGS=-Dcpp_args=-I${{ github.workspace }}/thirdparty" >> "$GITHUB_ENV"
-
       - name: Configure (Unix)
         if: ${{ !matrix.windows }}
-        run: meson setup build ${VSFM_EXTRA_ARGS:-}
+        run: meson setup build
 
       # freetype, libpng and zlib come from subprojects here, all linked
       # statically, and b_vscrt pulls in the CRT statically too. The result is
@@ -135,10 +122,23 @@ jobs:
       - name: Build
         run: meson compile -C build
 
-      # Loads the plugin the way Aegisub's CSRI loader does -- by path,
-      # resolving each entry point by name -- then renders through it.
+      # csri-abi loads the plugin the way Aegisub's CSRI loader does -- by
+      # path, resolving each entry point by name -- then renders through it.
+      # render-consistency renders tests/consistency/*.ass with the bundled
+      # font and requires every event's pixels to match expected.txt, which
+      # is the same file on every platform.
       - name: Test
         run: meson test -C build --print-errorlogs --suite vsfiltermod
+
+      # Kept even when the test fails, so the platforms' results can be
+      # compared side by side (see the consistency job below).
+      - name: Upload consistency manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consistency-${{ matrix.artifact }}
+          path: build/consistency/manifest.txt
+          if-no-files-found: warn
 
       # Proves the platform's font backend actually resolved a face: the
       # checker fails on a fully transparent image, not merely on a bad exit
@@ -206,6 +206,14 @@ jobs:
       - name: Test
         run: meson test -C build --print-errorlogs --suite vsfiltermod
 
+      - name: Upload consistency manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consistency-windows-x86_64-mingw
+          path: build/consistency/manifest.txt
+          if-no-files-found: warn
+
       - name: Render and validate BDN+XML
         run: |
           mkdir -p out
@@ -227,13 +235,34 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # Every build job checks its own rendering against expected.txt. This job
+  # puts all of them side by side, so a failure shows at a glance whether one
+  # platform disagrees with the others or all of them disagree with a stale
+  # expected.txt (after an intended rendering change: regenerate it with
+  # tests/consistency/run.py --update).
+  consistency:
+    name: Cross-platform rendering consistency
+    if: always()
+    needs: [build, mingw]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: consistency-*
+          path: manifests
+
+      - name: Compare manifests
+        run: python3 tests/consistency/compare.py tests/consistency/expected.txt manifests/*/manifest.txt
+
   # On a v* tag, publish the redistributable builds as a GitHub Release: one
   # archive per platform, holding the plugin, vsfmrender and the docs. The
   # MinGW build links against MSYS2's DLLs and is left out.
   release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, mingw]
+    needs: [build, mingw, consistency]
     runs-on: ubuntu-latest
     permissions:
       contents: write

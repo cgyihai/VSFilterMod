@@ -1,0 +1,34 @@
+[Script Info]
+; Cross-platform consistency fixture: vector drawings. No fonts at all, so
+; this isolates the parser, transform and rasterizer from font lookup.
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Shape,Caladea,20,&H0040C0FF,&H000000FF,&H00101010,&H80000000,0,0,0,0,100,100,0,0,1,3,2,7,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:00.40,Shape,,0,0,0,,{\pos(100,100)\p1}m 0 0 l 400 0 400 250 0 250 m 100 60 l 100 190 300 190 300 60{\p0}
+Dialogue: 0,0:00:00.40,0:00:00.80,Shape,,0,0,0,,{\pos(100,100)\p1}m 0 150 b 0 0 300 0 300 150 b 300 300 600 300 600 150{\p0}
+Dialogue: 0,0:00:00.80,0:00:01.20,Shape,,0,0,0,,{\pos(100,100)\p1}m 0 0 s 200 0 300 200 100 300 0 200 c{\p0}
+Dialogue: 0,0:00:01.20,0:00:01.60,Shape,,0,0,0,,{\pos(100,100)\p1}m 0 0 l 100 0 s 200 0 300 200 100 300 p 0 400 -100 300{\p0}
+Dialogue: 0,0:00:01.60,0:00:02.00,Shape,,0,0,0,,{\pos(100,100)\p3}m 0 0 l 1600 0 1600 1200 0 1200{\p0}
+Dialogue: 0,0:00:02.00,0:00:02.40,Shape,,0,0,0,,{\pos(100,300)\pbo-100\p1}m 0 0 l 300 0 150 260{\p0}
+Dialogue: 0,0:00:02.40,0:00:02.80,Shape,,0,0,0,,{\pos(200,150)\distort(0.3,0.1,1.4,-0.2,1.1,1.3)\p1}m 0 0 l 500 0 500 300 0 300{\p0}
+Dialogue: 0,0:00:02.80,0:00:03.20,Shape,,0,0,0,,{\pos(200,150)\distort(0.3,0.1,1.4,-0.2,1.1,1.3)\p1}m 0 0 l 500 0{\p0}
+Dialogue: 0,0:00:03.20,0:00:03.60,Shape,,0,0,0,,{\pos(200,150)\rnd4\rnds2\p1}m 0 0 l 500 0 500 300 0 300 m 50 50 l 450 50 450 250 0 250 c{\p0}
+Dialogue: 0,0:00:03.60,0:00:04.00,Shape,,0,0,0,,{\pos(640,360)\org(640,360)\frx50\fry30\frz10\z200\p1}m -200 -100 l 200 -100 200 100 -200 100{\p0}
+Dialogue: 0,0:00:04.00,0:00:04.40,Shape,,0,0,0,,{\pos(100,100)\blur12\bord10\xbord20\ybord4\p1}m 0 0 l 600 0 600 200 0 200{\p0}
+Dialogue: 0,0:00:04.40,0:00:04.80,Shape,,0,0,0,,{\pos(100,100)\be6\shad15\4a&H40&\alpha&H30&\p1}m 0 0 l 600 0 300 400{\p0}
+Dialogue: 0,0:00:04.80,0:00:05.60,Shape,,0,0,0,,{\move(100,100,900,500)\t(0,800,0.5,\frz120\blur6\1c&HFF00FF&)\p1}m 0 0 l 200 0 200 100 0 100{\p0}
+Dialogue: 0,0:00:05.60,0:00:06.40,Shape,,0,0,0,,{\pos(640,360)\org(640,360)\t(\frz-90\frx60\fscx200)\p1}m -150 -40 l 150 -40 150 40 -150 40{\p0}
+Dialogue: 0,0:00:06.40,0:00:06.80,Shape,,0,0,0,,{\pos(300,100)\fax-0.4\fay0.2\fscx150\fscy60\p1}m 0 0 l 400 0 400 400 0 400{\p0}
+Dialogue: 0,0:00:06.80,0:00:07.20,Shape,,0,0,0,,{\pos(100,100)\1vc(&H0000FF&,&H00FF00&,&HFF0000&,&HFFFFFF&)\1va(&H00&,&H80&,&H40&,&HC0&)\p1}m 0 0 l 800 0 800 400 0 400{\p0}
+Dialogue: 0,0:00:07.20,0:00:07.60,Shape,,0,0,0,,{\pos(100,100)\clip(2,m 0 0 l 600 0 0 400)\p1}m 0 0 l 900 0 900 500 0 500{\p0}
+Dialogue: 0,0:00:07.60,0:00:08.00,Shape,,0,0,0,,{\pos(100,100)\iclip(200,150,500,350)\bord0\shad0\p1}m 0 0 l 700 0 700 450 0 450{\p0}
+Dialogue: 0,0:00:08.00,0:00:08.40,Shape,,0,0,0,,{\pos(100,100)\bord0\shad0\p1}m 0 0 l 0 0 0 0{\p0}

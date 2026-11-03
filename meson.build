@@ -56,8 +56,9 @@ if cxx.get_id() != 'msvc'
         language : ['c', 'cpp'])
 endif
 
-# SSE2 is a baseline assumption of the blend kernels. It is implied by x86-64
-# and by AArch64-through-sse2neon; only 32-bit x86 has to ask for it.
+# 32-bit x86 must do float arithmetic in SSE registers, not on the x87 stack
+# with its 80-bit intermediates, or glyph positions would differ from every
+# other build. x86-64 always uses SSE.
 if host_cpu == 'x86'
     if cxx.get_id() == 'msvc'
         add_project_arguments('/arch:SSE2', language : ['c', 'cpp'])
@@ -127,20 +128,6 @@ if host_system != 'windows'
     endif
 endif
 
-# On AArch64 (Apple Silicon, ARM Linux) the SSE2 blend kernels go through
-# sse2neon, a header-only shim, so Rasterizer stays single-sourced. It is
-# optional: without it the scalar kernels are used instead, which is correct
-# but slower. Point at it with -Dcpp_args=-I/path/to/sse2neon, or drop the
-# header somewhere on the include path.
-sse2neon_inc = []
-if host_cpu == 'aarch64'
-    if cxx.has_header('sse2neon.h')
-        message('sse2neon found: using the SSE2 blend kernels on NEON')
-    else
-        warning('sse2neon.h not found; falling back to the scalar blend kernels')
-    endif
-endif
-
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
@@ -189,7 +176,7 @@ endif
 
 csri_lib = shared_library('vsfiltermod',
     vsfm_src + plugin_src,
-    include_directories : [inc] + sse2neon_inc,
+    include_directories : inc,
     dependencies : deps + plugin_deps,
     name_prefix : '',
     gnu_symbol_visibility : 'hidden',
@@ -224,6 +211,22 @@ if get_option('tests')
         build_by_default : false)
 
     test('det-float', det_float_test)
+
+    # Renders tests/consistency/*.ass with the bundled font embedded, and
+    # requires every event's pixels to match tests/consistency/expected.txt.
+    # The same file is checked on every platform in CI, so a pass everywhere
+    # means Windows, Linux and macOS render identically.
+    if get_option('bdnxml')
+        py = find_program('python3', 'python', required : false)
+        if py.found()
+            test('render-consistency', py,
+                 args : [files('tests/consistency/run.py'),
+                         '--renderer', vsfmrender.full_path(),
+                         '--out', meson.current_build_dir() / 'consistency'],
+                 depends : [vsfmrender],
+                 timeout : 300)
+        endif
+    endif
 
     # Type-checks the POSIX branch of the compatibility layer while building
     # on Windows, by undefining _WIN32 after the system headers are in. It

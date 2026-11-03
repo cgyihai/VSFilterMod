@@ -6,10 +6,9 @@
  *
  *    - no COM, no allocator, no queue: one object per filter instance;
  *    - the 32-bit x86 inline-assembly branches are gone. Upstream's x64 build
- *      used the SSE2 intrinsics branch, which is kept, and which also covers
- *      AArch64 through sse2neon;
- *    - where no SSE2 is available, the YUY2 blend uses a scalar version that
- *      saturates exactly like the SSE2 code. Upstream's own scalar fallback
+ *      used the SSE2 intrinsics branch, which is kept on x86;
+ *    - elsewhere the YUY2 blend uses a scalar version that saturates exactly
+ *      like the SSE2 code (checked over every input). Upstream's own scalar fallback
  *      wrapped with `& 0xff` instead, so it disagreed with its SSE2 path on
  *      the pixels where the sum left 0..255;
  *    - RGB16/15, NV12, P010/P016 and AYUV are not carried over: no AviSynth

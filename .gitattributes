@@ -15,3 +15,8 @@
 *.PDF	 diff=astextplain
 *.rtf	 diff=astextplain
 *.RTF	 diff=astextplain
+
+# Test fonts and images are binary
+*.ttf    binary
+*.otf    binary
+*.png    binary
