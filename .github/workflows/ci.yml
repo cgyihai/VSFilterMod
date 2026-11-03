@@ -99,7 +99,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Linux uses the system Python: setup-python has no build for every
+      # Ubuntu 22.04 ARM image.
       - uses: actions/setup-python@v5
+        if: runner.os != 'Linux'
         with:
           python-version: '3.12'
           # The 32-bit build is tested by running 32-bit binaries, which the
@@ -107,7 +110,14 @@ jobs:
           architecture: ${{ matrix.msvc_arch == 'arm64' && 'arm64' || 'x64' }}
 
       - name: Install Meson and Ninja
+        if: runner.os != 'Linux'
         run: python -m pip install --upgrade meson ninja
+
+      - name: Install Meson and Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m pip install --user --upgrade meson ninja
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -202,7 +212,9 @@ jobs:
           "${{ matrix.renderer }}" --version
           "${{ matrix.renderer }}" --quiet --size 1280x720 --fps 23.976 \
             tests/smoke.ass out/smoke.xml
-          python tests/check_bdnxml.py --min-events 5 out/smoke.xml
+          # "python" where setup-python provided it; the system's python3 on Linux.
+          PY=python; command -v python >/dev/null 2>&1 || PY=python3
+          "$PY" tests/check_bdnxml.py --min-events 5 out/smoke.xml
 
       - name: Check the macOS build is self-contained
         if: runner.os == 'macOS'

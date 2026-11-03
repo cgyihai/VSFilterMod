@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 
 /* Every operation below must round on its own: a fused multiply-add would
  * change the result on CPUs that have one. */
@@ -292,8 +293,11 @@ double DetLog(double x)
 
     int k = 0;
     if (hx < 0x00100000) {                      // x < 2**-1022
-        if (((hx & 0x7fffffff) | lx) == 0) return -two54 / zero;  // log(+-0) = -inf
-        if (hx < 0) return (x - x) / zero;                          // log(-#) = NaN
+        /* fdlibm divides by zero here to raise the FP exceptions; MSVC
+         * refuses a constant division by zero, and the results are all
+         * that matter. */
+        if (((hx & 0x7fffffff) | lx) == 0) return -std::numeric_limits<double>::infinity();  // log(+-0)
+        if (hx < 0) return std::numeric_limits<double>::quiet_NaN();                          // log(-#)
         k -= 54;
         x *= two54;                             // subnormal, scale up x
         hx = High(x);
@@ -344,7 +348,7 @@ double DetPow(double x, double y)
     if (x == 0.0) return y > 0.0 ? 0.0 : HUGE_VAL;
     if (x < 0.0) {
         /* Defined only for integral y; the sign follows its parity. */
-        if (std::floor(y) != y) return (x - x) / (x - x);
+        if (std::floor(y) != y) return std::numeric_limits<double>::quiet_NaN();
         const double m = DetExp(y * DetLog(-x));
         return std::fmod(y, 2.0) != 0.0 ? -m : m;
     }
