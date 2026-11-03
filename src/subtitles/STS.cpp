@@ -542,7 +542,7 @@ static bool OpenSubRipper(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
                     break;
                 }
 
-                str += tmp + '\n';
+                str += tmp + L'\n';   // L'': with a char, 32-bit MSVC finds the call ambiguous
             }
 
             ret.Add(
