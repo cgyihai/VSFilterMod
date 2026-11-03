@@ -25,6 +25,14 @@
   wider or taller than 131,072 pixels are no longer drawn (the limit was
   2^20), and widening an outline is capped at a cost about 45 times that of
   a full-frame 1080p glyph with `\bord100`. Found by the fuzzer.
+- A header line with no value -- `YCbCr Matrix:`, `Collisions:`,
+  `ScaledBorderAndShadow:` -- threw an exception out of the parser and
+  crashed Aegisub (upstream does the same). The field keeps its default.
+- No C++ exception can escape into a host any more: the CSRI, AviSynth and
+  VapourSynth entry points catch them, and a format reader that throws fails
+  like one that finds a syntax error.
+- `tests/regressions/`: scripts that once crashed or hung, each rendered by
+  a test of its own and used as fuzzer seeds.
 - `fuzz_render` reports inputs that take 5 s or more by iteration number, and
   `VSFM_FUZZ_DUMP=N` saves iteration N's input.
 

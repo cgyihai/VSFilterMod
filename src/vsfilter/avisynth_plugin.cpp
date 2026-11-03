@@ -263,7 +263,7 @@ AVS_Value MakeTextSub(AVS_ScriptEnvironment* env, AVS_Value child, const char* f
 }
 
 // TextSubMod(clip, [file]s, [charset]i, [fps]f, [vfr]s)
-AVS_Value AVSC_CC TextSubCreate(AVS_ScriptEnvironment* env, AVS_Value args, void* user_data)
+AVS_Value TextSubCreateUnguarded(AVS_ScriptEnvironment* env, AVS_Value args, void* user_data)
 {
     const char* name = (const char*)user_data;
     AVS_Value clip = avs_array_elt(args, 0);
@@ -283,7 +283,7 @@ AVS_Value AVSC_CC TextSubCreate(AVS_ScriptEnvironment* env, AVS_Value args, void
 }
 
 // MaskSubMod([file]s, [width]i, [height]i, [fps]f, [length]i, [charset]i, [vfr]s)
-AVS_Value AVSC_CC MaskSubCreate(AVS_ScriptEnvironment* env, AVS_Value args, void* user_data)
+AVS_Value MaskSubCreateUnguarded(AVS_ScriptEnvironment* env, AVS_Value args, void* user_data)
 {
     const char* name = (const char*)user_data;
     AVS_Value file   = avs_array_elt(args, 0);
@@ -320,6 +320,26 @@ AVS_Value AVSC_CC MaskSubCreate(AVS_ScriptEnvironment* env, AVS_Value args, void
                                 name);
     g_avs.release_value(black);
     return ret;
+}
+
+/* No C++ exception may unwind into AviSynth (an allocation failure, say);
+ * the render path itself does not throw (SubtitleSource). */
+AVS_Value AVSC_CC TextSubCreate(AVS_ScriptEnvironment* env, AVS_Value args, void* user_data)
+{
+    try {
+        return TextSubCreateUnguarded(env, args, user_data);
+    } catch (...) {
+        return Error(env, std::string((const char*)user_data) + ": out of memory");
+    }
+}
+
+AVS_Value AVSC_CC MaskSubCreate(AVS_ScriptEnvironment* env, AVS_Value args, void* user_data)
+{
+    try {
+        return MaskSubCreateUnguarded(env, args, user_data);
+    } catch (...) {
+        return Error(env, std::string((const char*)user_data) + ": out of memory");
+    }
 }
 
 // TextSubModSwapUV(bool)

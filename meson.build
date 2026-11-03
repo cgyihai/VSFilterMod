@@ -308,6 +308,19 @@ if get_option('tests')
         endif
     endif
 
+    # Scripts that once crashed, hung or exhausted memory (tests/regressions):
+    # each must render to BDN+XML, with at least one event, within the time
+    # limit. They are fuzzer seeds too.
+    if get_option('bdnxml')
+        foreach name : ['empty-header-values', 'huge-stretch']
+            test('regression-' + name, vsfmrender,
+                 args : ['--quiet', '--size', '640x360', '--fps', '25',
+                         files('tests/regressions' / name + '.ass'),
+                         meson.current_build_dir() / 'regression-' + name + '.xml'],
+                 timeout : 60)
+        endforeach
+    endif
+
     # Loads the plugin into VapourSynth and renders the consistency fixtures
     # onto clips of every supported format: checks the output against
     # tests/vsplugin/expected.txt and the formats against one another.

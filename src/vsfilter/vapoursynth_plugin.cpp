@@ -118,6 +118,7 @@ const VSFrame* VS_CC TextSubGetFrame(int n, int activationReason, void* instance
     const RECT& dirty = subpic->Dirty();
     if (dirty.right <= dirty.left || dirty.bottom <= dirty.top) return src;
 
+    /* SubtitleSource::Render does not throw, and the blends cannot. */
     VSFrame* dst = vsapi->copyFrame(src, core);
     vsapi->freeFrame(src);
     Composite(d, subpic, dst, vsapi);
@@ -167,7 +168,7 @@ std::string ChooseLayout(const VSVideoInfo& vi, Layout* layout, int* subpicType)
     }
 }
 
-void VS_CC TextSubCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const VSAPI* vsapi)
+void TextSubCreateUnguarded(const VSMap* in, VSMap* out, void* userData, VSCore* core, const VSAPI* vsapi)
 {
     const std::string name = static_cast<const char*>(userData);
     std::unique_ptr<TextSubData> d(new TextSubData());
@@ -213,6 +214,16 @@ void VS_CC TextSubCreate(const VSMap* in, VSMap* out, void* userData, VSCore* co
     TextSubData* data = d.release();
     vsapi->createVideoFilter(out, name.c_str(), &data->vi, TextSubGetFrame, TextSubFree,
                              fmParallelRequests, deps, 1, data, core);
+}
+
+/* No C++ exception may unwind into VapourSynth (an allocation failure, say). */
+void VS_CC TextSubCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const VSAPI* vsapi)
+{
+    try {
+        TextSubCreateUnguarded(in, out, userData, core, vsapi);
+    } catch (...) {
+        vsapi->mapSetError(out, (std::string(static_cast<const char*>(userData)) + ": out of memory").c_str());
+    }
 }
 
 } // namespace

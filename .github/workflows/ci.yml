@@ -416,7 +416,7 @@ jobs:
           # printed so a failure can be reproduced.
           seed=${{ github.run_number }}
           echo "fuzz seed: $seed"
-          ../build/fuzz_render 3000 "$seed" ../tests/*.ass ../tests/consistency/*.ass
+          ../build/fuzz_render 3000 "$seed" ../tests/*.ass ../tests/consistency/*.ass ../tests/regressions/*.ass
 
       - name: Upload the failing input
         if: failure()

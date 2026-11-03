@@ -60,21 +60,32 @@ std::wstring ScriptPath(const char* s, bool preferUtf8)
 SubtitleSource::SubtitleSource() = default;
 SubtitleSource::~SubtitleSource() = default;
 
+/* Nothing below lets a C++ exception escape: both callers are entered from
+ * a frame server through a C ABI. A script that makes the parser or the
+ * renderer throw fails to open, or draws nothing on that frame. */
+
 bool SubtitleSource::Open(const std::wstring& path, int charset)
 {
-    m_rts.reset(new CRenderedTextSubtitle(&m_rtsLock));
-    if (!m_rts->Open(CString(path.c_str()), charset)) {
-        m_rts.reset();
-        return false;
+    try {
+        m_rts.reset(new CRenderedTextSubtitle(&m_rtsLock));
+        if (m_rts->Open(CString(path.c_str()), charset)) {
+            m_matrix = m_rts->m_eYCbCrMatrix;
+            m_range = m_rts->m_eYCbCrRange;
+            return true;
+        }
+    } catch (...) {
     }
-    m_matrix = m_rts->m_eYCbCrMatrix;
-    m_range = m_rts->m_eYCbCrRange;
-    return true;
+    m_rts.reset();
+    return false;
 }
 
 bool SubtitleSource::OpenVfr(const std::wstring& path)
 {
-    m_vfr = GetVFRTranslator(path);
+    try {
+        m_vfr = GetVFRTranslator(path);
+    } catch (...) {
+        m_vfr.reset();
+    }
     return (bool)m_vfr;
 }
 
@@ -92,6 +103,19 @@ REFERENCE_TIME SubtitleSource::Timestamp(int n, float fps) const
 }
 
 const MemSubPic* SubtitleSource::Render(REFERENCE_TIME rt, int type, int w, int h)
+{
+    try {
+        return RenderUnguarded(rt, type, w, h);
+    } catch (...) {
+        /* The subpicture may hold a partial render with no dirty rectangle
+         * recorded to clear it by; start the next frame from a fresh one. */
+        m_subpic.reset();
+        m_cachedStart = m_cachedStop = 0;
+        return nullptr;
+    }
+}
+
+const MemSubPic* SubtitleSource::RenderUnguarded(REFERENCE_TIME rt, int type, int w, int h)
 {
     if (!m_rts) return nullptr;
 

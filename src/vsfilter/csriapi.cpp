@@ -59,7 +59,26 @@ static csri_rend csri_vsfilter = "vsfiltermod";
 static csri_rend csri_vsfilter = "vsfilter";
 #endif
 
-CSRIAPI csri_inst *csri_open_file(csri_rend *renderer, const char *filename, struct csri_openflag *flags)
+/* No C++ exception may cross into the host: Aegisub and the frame servers
+ * call these through a C ABI, and an exception unwinding out of them ends
+ * the process. The parsers report malformed fields by throwing, and an
+ * allocation can fail; either way the call fails as a bad script does --
+ * no instance, or no subtitle drawn. */
+template <typename F>
+static void NoThrow(F f)
+{
+    try { f(); } catch(...) {}
+}
+
+static void DeleteInst(csri_inst *inst)
+{
+    if(!inst) return;
+    delete inst->rts;
+    delete inst->cs;
+    delete inst;
+}
+
+static csri_inst *OpenFile(csri_rend *renderer, const char *filename, struct csri_openflag *flags)
 {
     (void)renderer; (void)flags;
     if(!filename) return 0;
@@ -69,53 +88,68 @@ CSRIAPI csri_inst *csri_open_file(csri_rend *renderer, const char *filename, str
     if(path.IsEmpty()) return 0;
 
     csri_inst *inst = new csri_inst();
-    inst->cs = new CCritSec();
-    inst->rts = new CRenderedTextSubtitle(inst->cs);
-
-    if(inst->rts->Open(CString(path), DEFAULT_CHARSET))
+    inst->rts = 0;
+    inst->cs = 0;
+    bool ok = false;
+    NoThrow([&] {
+        inst->cs = new CCritSec();
+        inst->rts = new CRenderedTextSubtitle(inst->cs);
+        ok = inst->rts->Open(CString(path), DEFAULT_CHARSET);
+    });
+    if(ok)
     {
         inst->readorder = 0;
         return inst;
     }
 
-    delete inst->rts;
-    delete inst->cs;
-    delete inst;
+    DeleteInst(inst);
     return 0;
 }
 
+CSRIAPI csri_inst *csri_open_file(csri_rend *renderer, const char *filename, struct csri_openflag *flags)
+{
+    csri_inst *inst = 0;
+    NoThrow([&] { inst = OpenFile(renderer, filename, flags); });
+    return inst;
+}
 
-CSRIAPI csri_inst *csri_open_mem(csri_rend *renderer, const void *data, size_t length, struct csri_openflag *flags)
+
+static csri_inst *OpenMem(csri_rend *renderer, const void *data, size_t length, struct csri_openflag *flags)
 {
     (void)renderer; (void)flags;
     /* Parses straight out of `data`; CSimpleTextSubtitle::Open no longer
      * spools it to a temp file first. This is the path Aegisub drives on
      * every edit. */
     csri_inst *inst = new csri_inst();
-    inst->cs = new CCritSec();
-    inst->rts = new CRenderedTextSubtitle(inst->cs);
-    if(inst->rts->Open((BYTE*)data, (int)length, DEFAULT_CHARSET, _T("CSRI memory subtitles")))
+    inst->rts = 0;
+    inst->cs = 0;
+    bool ok = false;
+    NoThrow([&] {
+        inst->cs = new CCritSec();
+        inst->rts = new CRenderedTextSubtitle(inst->cs);
+        ok = inst->rts->Open((BYTE*)data, (int)length, DEFAULT_CHARSET, _T("CSRI memory subtitles"));
+    });
+    if(ok)
     {
         inst->readorder = 0;
         return inst;
     }
-    else
-    {
-        delete inst->rts;
-        delete inst->cs;
-        delete inst;
-        return 0;
-    }
+
+    DeleteInst(inst);
+    return 0;
+}
+
+CSRIAPI csri_inst *csri_open_mem(csri_rend *renderer, const void *data, size_t length, struct csri_openflag *flags)
+{
+    csri_inst *inst = 0;
+    NoThrow([&] { inst = OpenMem(renderer, data, length, flags); });
+    return inst;
 }
 
 
 CSRIAPI void csri_close(csri_inst *inst)
 {
-    if(!inst) return;
-
-    delete inst->rts;
-    delete inst->cs;
-    delete inst;
+    NoThrow([&] { DeleteInst(inst); });
 }
 
 
@@ -148,7 +182,7 @@ CSRIAPI int csri_request_fmt(csri_inst *inst, const struct csri_fmt *fmt)
 }
 
 
-CSRIAPI void csri_render(csri_inst *inst, struct csri_frame *frame, double time)
+static void Render(csri_inst *inst, struct csri_frame *frame, double time)
 {
     if(!inst || !frame)
         return;
@@ -215,6 +249,11 @@ CSRIAPI void csri_render(csri_inst *inst, struct csri_frame *frame, double time)
     inst->rts->Render(spd, (REFERENCE_TIME)(time * 10000000), arbitrary_framerate, rendered_bbox);
 }
 
+CSRIAPI void csri_render(csri_inst *inst, struct csri_frame *frame, double time)
+{
+    NoThrow([&] { Render(inst, frame, time); });
+}
+
 
 // Stream extension implementation
 static csri_inst *vsfilter_init_stream(csri_rend *renderer, const void *header, size_t headerlen, struct csri_openflag *flags)
@@ -222,7 +261,7 @@ static csri_inst *vsfilter_init_stream(csri_rend *renderer, const void *header, 
     return csri_open_mem(renderer, header, headerlen, flags);
 }
 
-static void vsfilter_push_packet(csri_inst *inst, const void *packet, size_t packetlen, double pts_start, double pts_end)
+static void PushPacket(csri_inst *inst, const void *packet, size_t packetlen, double pts_start, double pts_end)
 {
     if (!inst || !inst->rts || !packet || packetlen == 0) return;
 
@@ -257,16 +296,21 @@ static void vsfilter_push_packet(csri_inst *inst, const void *packet, size_t pac
     }
 }
 
+static void vsfilter_push_packet(csri_inst *inst, const void *packet, size_t packetlen, double pts_start, double pts_end)
+{
+    NoThrow([&] { PushPacket(inst, packet, packetlen, pts_start, pts_end); });
+}
+
 static void vsfilter_discard(csri_inst *inst, int all)
 {
-    if (inst && inst->rts) {
+    NoThrow([&] { if (inst && inst->rts) {
         // VSFilter's RTS doesn't have an exact "discard" per-se for streaming,
         // but we can remove all entries if `all` is requested (similar to NewSegment).
         if (all) {
             inst->rts->RemoveAll();
             inst->rts->CreateSegments();
         }
-    }
+    } });
 }
 
 static struct csri_stream_ext vsfilter_stream_ext = {

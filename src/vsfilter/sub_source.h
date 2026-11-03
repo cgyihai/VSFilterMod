@@ -58,13 +58,16 @@ public:
 
     /* Renders the subtitle at `rt` for a w x h destination of MSP_* `type` and
      * returns the subpicture to composite, or nullptr when nothing is shown.
-     * The subpicture is created on the first call, typed after it. */
+     * The subpicture is created on the first call, typed after it. Open,
+     * OpenVfr and Render never throw. */
     const MemSubPic* Render(REFERENCE_TIME rt, int type, int w, int h);
 
     int Matrix() const { return m_matrix; }
     int Range() const { return m_range; }
 
 private:
+    const MemSubPic* RenderUnguarded(REFERENCE_TIME rt, int type, int w, int h);
+
     CCritSec m_rtsLock;
     std::unique_ptr<CRenderedTextSubtitle> m_rts;
     std::unique_ptr<MemSubPic> m_subpic;
