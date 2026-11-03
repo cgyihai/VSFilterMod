@@ -42,7 +42,10 @@ int Rasterizer::getOverlayWidth()
     return mOverlayWidth * 8;
 }
 
-Rasterizer::Rasterizer() : mpPathTypes(NULL), mpPathPoints(NULL), mPathPoints(0), mpOverlayBuffer(NULL)
+Rasterizer::Rasterizer()
+    : fFirstSet(false), mpPathTypes(NULL), mpPathPoints(NULL), mPathPoints(0),
+      mWidth(0), mHeight(0), mWideBorder(0), mpEdgeBuffer(NULL), mEdgeHeapSize(0),
+      mEdgeNext(0), mpScanBuffer(NULL), mpOverlayBuffer(NULL)
 {
     mOverlayWidth = mOverlayHeight = 0;
     mPathOffsetX = mPathOffsetY = 0;
@@ -213,7 +216,7 @@ void Rasterizer::_EvaluateLine(int x0, int y0, int x1, int y1)
 
         if(iy <= y1)
         {
-            __int64 invslope = ((__int64)(x1 - x0) << 16) / dy;
+            __int64 invslope = ((__int64)(x1 - x0) * 65536) / dy;
 
             while(mEdgeNext + y1 + 1 - iy > mEdgeHeapSize)
                 _ReallocEdgeBuffer(mEdgeHeapSize * 2);
@@ -248,7 +251,7 @@ void Rasterizer::_EvaluateLine(int x0, int y0, int x1, int y1)
 
         if(iy <= y0)
         {
-            __int64 invslope = ((__int64)(x0 - x1) << 16) / dy;
+            __int64 invslope = ((__int64)(x0 - x1) * 65536) / dy;
 
             while(mEdgeNext + y0 + 1 - iy > mEdgeHeapSize)
                 _ReallocEdgeBuffer(mEdgeHeapSize * 2);
@@ -346,15 +349,17 @@ bool Rasterizer::ScanConvert()
         return 0;
     }
 
-    ptrdiff_t minx = INT_MAX;
-    ptrdiff_t miny = INT_MAX;
-    ptrdiff_t maxx = INT_MIN;
-    ptrdiff_t maxy = INT_MIN;
+    /* 64-bit on every platform: ptrdiff_t is 32 bits on 32-bit Windows, where
+     * the extent of a path with extreme coordinates would overflow. */
+    int64_t minx = INT_MAX;
+    int64_t miny = INT_MAX;
+    int64_t maxx = INT_MIN;
+    int64_t maxy = INT_MIN;
 
     for(i = 0; i < mPathPoints; ++i)
     {
-        ptrdiff_t ix = mpPathPoints[i].x;
-        ptrdiff_t iy = mpPathPoints[i].y;
+        int64_t ix = mpPathPoints[i].x;
+        int64_t iy = mpPathPoints[i].y;
 
         if(ix < minx) minx = ix;
         if(ix > maxx) maxx = ix;
@@ -381,11 +386,27 @@ bool Rasterizer::ScanConvert()
         return true;
     }
 
-    mWidth = maxx + 1 - minx;
-    mHeight = maxy + 1 - miny;
+    /* A shape no screen could show -- "m -2147483648 0 l 400 0 ..." -- would
+     * otherwise be scan-converted and filled in full: billions of pixels,
+     * minutes of work and gigabytes of memory for one frame. Anything wider
+     * or taller than 2^20 pixels, or larger than 2^28 pixels in area (thirty
+     * 4K frames), is not drawn. Width and height here are in eighths of a
+     * pixel. */
+    const int64_t width = maxx + 1 - minx, height = maxy + 1 - miny;
+    if(width > ((int64_t)1 << 23) || height > ((int64_t)1 << 23)
+       || width * height > ((int64_t)1 << 34))
+    {
+        mWidth = mHeight = 0;
+        mPathOffsetX = mPathOffsetY = 0;
+        _TrashPath();
+        return true;
+    }
 
-    mPathOffsetX = minx;
-    mPathOffsetY = miny;
+    mWidth = (int)width;
+    mHeight = (int)height;
+
+    mPathOffsetX = (int)minx;
+    mPathOffsetY = (int)miny;
 
     // Initialize edge buffer.  We use edge 0 as a sentinel.
 
@@ -535,8 +556,8 @@ void Rasterizer::_OverlapRegion(tSpanBuffer& dst, tSpanBuffer& src, int dx, int 
 
     // Don't worry -- even if dy<0 this will still work! // G: hehe, the evil twin :)
 
-    uint64_t offset1 = (((__int64)dy) << 32) - dx;
-    uint64_t offset2 = (((__int64)dy) << 32) + dx;
+    uint64_t offset1 = ((__int64)dy * ((__int64)1 << 32)) - dx;
+    uint64_t offset2 = ((__int64)dy * ((__int64)1 << 32)) + dx;
 
     while(itA != itAE && itB != itBE)
     {

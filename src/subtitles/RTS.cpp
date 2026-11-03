@@ -20,6 +20,7 @@
  */
 
 #include "../compat/vsfm_compat.h"
+#include "../compat/det_float.h"
 #include <cmath>
 #include <math.h>
 #include <time.h>
@@ -47,7 +48,7 @@ CMyFont::CMyFont(const STSStyle& style)
     /* Positive height, i.e. a GDI character *cell* height. RTS has already
      * multiplied fontSize by 64; the ">> 3" below takes it back to the 8x
      * supersampled space the rasterizer works in. */
-    desc.height = (int)(style.fontSize + 0.5);
+    desc.height = vsfm::CvtTruncSd(style.fontSize + 0.5);
     desc.weight = style.fontWeight;
     desc.charSet = style.charSet;
     desc.italic = !!style.fItalic;

@@ -1105,7 +1105,7 @@ bool FontFace::AppendString(const wchar_t* str, int len, int dx, int dy, GlyphPa
             continue;
         }
 
-        b.penX += (FT_Pos)kern << 6;
+        b.penX += (FT_Pos)kern * 64;
         FT_Pos advance = (FT_Pos)Round26_6(impl->face->glyph->advance.x) << 6;
 
         b.sideways = false;
@@ -2170,15 +2170,17 @@ bool FontEngine::SetupSize(FontFaceImpl* impl, const FontDesc& desc, FontMetrics
         winDescent = 0;
     }
 
-    int emPixels;
+    long long em;
     if (requested > 0) {
         const int cell = winAscent + winDescent;
         if (cell <= 0) return false;
-        emPixels = MulDiv(requested, f->units_per_EM, cell);
+        em = (long long)MulDiv(requested, f->units_per_EM, cell);
     } else {
-        emPixels = -requested;
+        em = -(long long)requested;
     }
-    if (emPixels < 1) emPixels = 1;
+    /* Absurd sizes from a script (\fs99999999) are clamped rather than
+     * overflowing; nothing that large is visible anyway. */
+    const int emPixels = em < 1 ? 1 : (em > 16384 ? 16384 : (int)em);
 
     if (FT_Set_Pixel_Sizes(f, 0, (FT_UInt)emPixels) != 0) return false;
     impl->emSize = emPixels;

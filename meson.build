@@ -1,5 +1,5 @@
 project('vsfiltermod', 'c', 'cpp',
-    version : '1.1.90',
+    version : '1.2.0',
     license : 'GPL-2.0-or-later',
     meson_version : '>=0.59.0',
     default_options : [
@@ -53,6 +53,17 @@ endif
 if cxx.get_id() != 'msvc'
     add_project_arguments(
         cxx.get_supported_arguments('-ffp-contract=off'),
+        language : ['c', 'cpp'])
+endif
+
+# Integer arithmetic on values from a script (\fs99999999, PlayResX: -2147483648,
+# timestamps of a million hours) can overflow. Upstream's x86 build simply
+# wrapped; -fwrapv makes that the defined behaviour for GCC and Clang, so their
+# optimizers cannot turn such input into different results on different
+# compilers. (MSVC wraps without being asked.)
+if cxx.get_id() != 'msvc'
+    add_project_arguments(
+        cxx.get_supported_arguments('-fwrapv'),
         language : ['c', 'cpp'])
 endif
 
@@ -148,7 +159,39 @@ vsfm_src = files(
     'src/subtitles/TextFile.cpp',
 ) + font_src
 
-inc = include_directories('src', 'src/vsfilter', 'include')
+# The version lives in the project() call above and nowhere else: it is
+# configured into vsfm_version.h (and, on Windows, the file properties).
+version_parts = meson.project_version().split('.')
+version_conf = configuration_data()
+version_conf.set('VERSION', meson.project_version())
+version_conf.set('MAJOR', version_parts[0])
+version_conf.set('MINOR', version_parts[1])
+version_conf.set('PATCH', version_parts[2])
+configure_file(input : 'src/vsfm_version.h.in', output : 'vsfm_version.h',
+               configuration : version_conf)
+
+# Windows version resources for the plugin and vsfmrender.
+version_rc = {}
+if host_system == 'windows'
+    winmod = import('windows')
+    foreach target, info : {
+        'plugin' : ['VSFilterMod subtitle renderer (CSRI and AviSynth+ plugin)', 'vsfiltermod', 'vsfiltermod.dll', 'VFT_DLL'],
+        'renderer' : ['VSFilterMod BDN+XML renderer', 'vsfmrender', 'vsfmrender.exe', 'VFT_APP'],
+    }
+        rc_conf = configuration_data()
+        rc_conf.merge_from(version_conf)
+        rc_conf.set('DESCRIPTION', info[0])
+        rc_conf.set('NAME', info[1])
+        rc_conf.set('FILENAME', info[2])
+        rc_conf.set('FILETYPE', info[3])
+        rc = configure_file(input : 'src/vsfm_version.rc.in',
+                            output : info[1] + '_version.rc',
+                            configuration : rc_conf)
+        version_rc += {target : winmod.compile_resources(rc)}
+    endforeach
+endif
+
+inc = include_directories('.', 'src', 'src/vsfilter', 'include')
 
 # ---------------------------------------------------------------------------
 # The CSRI plugin
@@ -176,12 +219,22 @@ if get_option('avisynth')
     endif
 endif
 
+# On ELF platforms, symbols of static libraries linked into the plugin (the
+# FreeType and libpng subprojects, when used) stay private to it. The host
+# application and fontconfig load the system FreeType; without this, calls in
+# one copy could bind to the other.
+plugin_link_args = []
+if host_system != 'windows' and host_system != 'darwin'
+    plugin_link_args += cxx.get_supported_link_arguments('-Wl,--exclude-libs,ALL')
+endif
+
 csri_lib = shared_library('vsfiltermod',
-    vsfm_src + plugin_src,
+    vsfm_src + plugin_src + version_rc.get('plugin', []),
     include_directories : inc,
     dependencies : deps + plugin_deps,
     name_prefix : '',
     gnu_symbol_visibility : 'hidden',
+    link_args : plugin_link_args,
     install : true,
     install_dir : get_option('libdir') / 'csri')
 
@@ -221,6 +274,15 @@ if get_option('tests')
         build_by_default : false)
 
     test('num-compat', num_compat_test)
+
+    # Not a test: run it explicitly, ideally in a -Db_sanitize=address,undefined
+    # build (the CI sanitizer job does). See tests/fuzz_render.cpp.
+    executable('fuzz_render',
+        vsfm_src + files('src/vsfilter/csriapi.cpp', 'tests/fuzz_render.cpp'),
+        include_directories : inc,
+        dependencies : deps,
+        gnu_symbol_visibility : 'default',
+        build_by_default : false)
 
     # Renders tests/consistency/*.ass with the bundled font embedded, and
     # requires every event's pixels to match tests/consistency/expected.txt.

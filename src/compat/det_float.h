@@ -43,6 +43,21 @@ inline int32_t CvtTruncSs(float f)
     return (f >= -2147483648.0f && f < 2147483648.0f) ? (int32_t)f : INT32_MIN;
 }
 
+/* CVTTSD2SI, the double version: what (int)d gives on x86, where upstream
+ * ran, for every input. Use it where a value from the script is converted:
+ * a plain cast of an out-of-range double is undefined, and AArch64
+ * saturates where x86 returns INT32_MIN. */
+inline int32_t CvtTruncSd(double d)
+{
+    return (d >= -2147483648.0 && d < 2147483648.0) ? (int32_t)d : INT32_MIN;
+}
+
+/* 32-bit integer arithmetic that wraps, as upstream's did on x86, instead
+ * of being undefined when a script supplies extreme values. */
+inline int32_t WrapMul(int32_t a, int32_t b) { return (int32_t)((uint32_t)a * (uint32_t)b); }
+inline int32_t WrapAdd(int32_t a, int32_t b) { return (int32_t)((uint32_t)a + (uint32_t)b); }
+inline int32_t WrapSub(int32_t a, int32_t b) { return (int32_t)((uint32_t)a - (uint32_t)b); }
+
 /* MINPS / MAXPS: the second operand is returned when either is NaN or when
  * they compare equal, which is not what std::min / std::max do. */
 inline float MinSs(float a, float b) { return a < b ? a : b; }

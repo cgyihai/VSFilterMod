@@ -3,6 +3,7 @@
  */
 
 #include "bdnxml_writer.h"
+#include "vsfm_version.h"
 #include "../font/font_engine.h"
 #include "../compat/vsfm_compat.h"
 
@@ -16,7 +17,7 @@ namespace {
 void Usage(const char* argv0)
 {
     std::fprintf(stderr,
-        "vsfmrender -- VSFilterMod BDN+XML renderer\n"
+        "vsfmrender " VSFM_VERSION " -- VSFilterMod BDN+XML renderer\n"
         "\n"
         "usage: %s [options] <subtitle.ass> <output.xml>\n"
         "\n"
@@ -35,6 +36,7 @@ void Usage(const char* argv0)
         "      --font-report    list what every font the script uses resolved to\n"
         "      --strict-fonts   fail (exit 3) if any font had to be substituted\n"
         "  -q, --quiet          suppress progress output\n"
+        "  -V, --version        print the version\n"
         "  -h, --help           this message\n",
         argv0);
 }
@@ -128,6 +130,10 @@ int main(int argc, char** argv)
         };
 
         if (a == "-h" || a == "--help") { Usage(argv[0]); return 0; }
+        else if (a == "-V" || a == "--version") {
+            std::printf("vsfmrender (VSFilterMod) %s\n", VSFM_VERSION);
+            return 0;
+        }
         else if (a == "-q" || a == "--quiet") quiet = true;
         else if (a == "-s" || a == "--size") {
             if (!ParseSize(next("--size"), &opt.width, &opt.height)) {

@@ -267,8 +267,8 @@ double DetExp(double x)
     const double c = x - t * (P1 + t * (P2 + t * (P3 + t * (P4 + t * P5))));
     if (k == 0) return one - ((x * c) / (c - 2.0) - x);
     const double y = one - ((lo - (x * c) / (2.0 - c)) - hi);
-    if (k >= -1021) return SetHigh(y, High(y) + (k << 20));
-    return SetHigh(y, High(y) + ((k + 1000) << 20)) * twom1000;
+    if (k >= -1021) return SetHigh(y, High(y) + k * (1 << 20));
+    return SetHigh(y, High(y) + (k + 1000) * (1 << 20)) * twom1000;
 }
 
 // e_log.c

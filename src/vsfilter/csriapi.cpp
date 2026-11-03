@@ -20,6 +20,7 @@
  */
 
 #include "../compat/vsfm_compat.h"
+#include "vsfm_version.h"
 #include "../subtitles/RTS.h"
 
 #include <limits>
@@ -307,7 +308,7 @@ static struct csri_info csri_vsfilter_info =
     // 2.38-0611-4 fixes be1-dots and ugly-fade bugs and adds xbord/ybord/xshad/yshad/blur tags and extends be
     // 2.39 merges with guliverkli2 fork
 #ifdef _VSMOD
-    "VSFilterMod/TextSub (guliverkli2)", // longname
+    "VSFilterMod/TextSub " VSFM_VERSION " (cross-platform)", // longname
 #else
     "VSFilter/TextSub (guliverkli2)", // longname
 #endif

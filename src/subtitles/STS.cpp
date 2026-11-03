@@ -21,6 +21,7 @@
 
 #include "STS.h"
 #include "../compat/vsfm_compat.h"
+#include "../compat/det_float.h"
 #include "../font/font_engine.h"
 #include <fstream>
 
@@ -31,6 +32,15 @@ const TCHAR* exttypestr[] =
     _T(".ssa"), _T(".ass"), _T(".idx"), _T(".usf"),
     _T(".xss"), _T(".rt")
 };
+
+/* (((h * 60 + m) * 60) + s) * 1000 + ms, wrapping at 32 bits as upstream's
+ * int arithmetic did, rather than overflowing undefinedly on absurd times. */
+static int HmsToMs(int h, int m, int s, int ms)
+{
+    using vsfm::WrapAdd;
+    using vsfm::WrapMul;
+    return WrapAdd(WrapMul(WrapAdd(WrapMul(WrapAdd(WrapMul(h, 60), m), 60), s), 1000), ms);
+}
 
 static long revcolor(long c)
 {
@@ -271,7 +281,7 @@ int FindChar(CStringW str, WCHAR c, int pos, bool fUnicode, int CharSet)
         WCHAR c2 = str[i];
 
         if(IsDBCSLeadByteEx(cp, (BYTE)c2)) i++;
-        else if(i >= pos)
+        else if((ptrdiff_t)i >= pos)   // pos may be negative, as with upstream's int i
         {
             if(c2 == c) return(i);
         }
@@ -538,8 +548,8 @@ static bool OpenSubRipper(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
             ret.Add(
                 SubRipper2SSA(str, CharSet),
                 file->IsUnicode(),
-                (((hh1 * 60 + mm1) * 60) + ss1) * 1000 + ms1,
-                (((hh2 * 60 + mm2) * 60) + ss2) * 1000 + ms2);
+                HmsToMs(hh1, mm1, ss1, ms1),
+                HmsToMs(hh2, mm2, ss2, ms2));
         }
         else if(c != EOF) // might be another format
         {
@@ -572,8 +582,8 @@ static bool OpenOldSubRipper(CTextFile* file, CSimpleTextSubtitle& ret, int Char
             ret.Add(
                 buff.Mid(buff.Find('}', buff.Find('}') + 1) + 1),
                 file->IsUnicode(),
-                (((hh1 * 60 + mm1) * 60) + ss1) * 1000,
-                (((hh2 * 60 + mm2) * 60) + ss2) * 1000);
+                HmsToMs(hh1, mm1, ss1, 0),
+                HmsToMs(hh2, mm2, ss2, 0));
         }
         else if(c != EOF) // might be another format
         {
@@ -601,7 +611,10 @@ static bool OpenSubViewer(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
             for(size_t i = 0; i < buff.GetLength() && buff[i] == '[';)
             {
                 int j = buff.Find(']', ++i);
-                if(j < i) break;
+                /* Find returns -1 when there is no ']'; upstream's int index
+                 * made that compare below i. Against a size_t it does not,
+                 * and the loop then wrapped i around to 0 forever. */
+                if(j < 0 || (size_t)j < i) break;
 
                 CStringW tag = buff.Mid(i, j - i);
                 tag.Trim();
@@ -666,8 +679,8 @@ static bool OpenSubViewer(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
 
             ret.Add(str,
                     file->IsUnicode(),
-                    (((hh1 * 60 + mm1) * 60) + ss1) * 1000 + hs1 * 10,
-                    (((hh2 * 60 + mm2) * 60) + ss2) * 1000 + hs2 * 10);
+                    HmsToMs(hh1, mm1, ss1, vsfm::WrapMul(hs1, 10)),
+                    HmsToMs(hh2, mm2, ss2, vsfm::WrapMul(hs2, 10)));
         }
         else if(c != EOF) // might be another format
         {
@@ -1214,8 +1227,8 @@ static bool OpenVPlayer(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet)
             CStringW str = buff.Mid(buff.Find(':', buff.Find(':', buff.Find(':') + 1) + 1) + 1);
             ret.Add(str,
                     file->IsUnicode(),
-                    (((hh * 60 + mm) * 60) + ss) * 1000,
-                    (((hh * 60 + mm) * 60) + ss) * 1000 + 1000 + 50 * str.GetLength());
+                    HmsToMs(hh, mm, ss, 0),
+                    HmsToMs(hh, mm, ss, 1000) + 50 * str.GetLength());
         }
         else if(c != EOF) // might be another format
         {
@@ -1479,7 +1492,7 @@ static bool OpenSubStationAlpha(CTextFile* file, CSimpleTextSubtitle& ret, int C
             {
                 ret.m_dstScreenSize.cy = (ret.m_dstScreenSize.cx == 1280)
                                          ? 1024
-                                         : ret.m_dstScreenSize.cx * 3 / 4;
+                                         : vsfm::WrapMul(ret.m_dstScreenSize.cx, 3) / 4;
             }
         }
         else if(entry == L"playresy")
@@ -1498,7 +1511,7 @@ static bool OpenSubStationAlpha(CTextFile* file, CSimpleTextSubtitle& ret, int C
             {
                 ret.m_dstScreenSize.cx = (ret.m_dstScreenSize.cy == 1024)
                                          ? 1280
-                                         : ret.m_dstScreenSize.cy * 4 / 3;
+                                         : vsfm::WrapMul(ret.m_dstScreenSize.cy, 4) / 3;
             }
         }
         else if(entry == L"wrapstyle")
@@ -1715,8 +1728,8 @@ static bool OpenSubStationAlpha(CTextFile* file, CSimpleTextSubtitle& ret, int C
 
                 ret.Add(buff,
                         file->IsUnicode(),
-                        (((hh1 * 60 + mm1) * 60) + ss1) * 1000 + ms1_div10 * 10,
-                        (((hh2 * 60 + mm2) * 60) + ss2) * 1000 + ms2_div10 * 10,
+                        HmsToMs(hh1, mm1, ss1, vsfm::WrapMul(ms1_div10, 10)),
+                        HmsToMs(hh2, mm2, ss2, vsfm::WrapMul(ms2_div10, 10)),
                         Style, Actor, Effect,
                         marginRect,
                         layer);
@@ -1814,7 +1827,7 @@ static bool OpenXombieSub(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
             {
                 ret.m_dstScreenSize.cy = (ret.m_dstScreenSize.cx == 1280)
                                          ? 1024
-                                         : ret.m_dstScreenSize.cx * 3 / 4;
+                                         : vsfm::WrapMul(ret.m_dstScreenSize.cx, 3) / 4;
             }
         }
         else if(entry == L"screenvertical")
@@ -1833,7 +1846,7 @@ static bool OpenXombieSub(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
             {
                 ret.m_dstScreenSize.cx = (ret.m_dstScreenSize.cy == 1024)
                                          ? 1280
-                                         : ret.m_dstScreenSize.cy * 4 / 3;
+                                         : vsfm::WrapMul(ret.m_dstScreenSize.cy, 4) / 3;
             }
         }
         else if(entry == L"style")
@@ -1918,8 +1931,8 @@ static bool OpenXombieSub(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
 
                 ret.Add(buff,
                         file->IsUnicode(),
-                        (((hh1 * 60 + mm1) * 60) + ss1) * 1000 + ms1,
-                        (((hh2 * 60 + mm2) * 60) + ss2) * 1000 + ms2,
+                        HmsToMs(hh1, mm1, ss1, ms1),
+                        HmsToMs(hh2, mm2, ss2, ms2),
                         Style, Actor, _T(""),
                         marginRect,
                         layer);
