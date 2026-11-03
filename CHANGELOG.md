@@ -18,6 +18,16 @@
 - The AviSynth+ and VapourSynth entry points share one render path
   (`src/vsfilter/sub_source.cpp`); AviSynth output is unchanged.
 
+### Fixes
+
+- A glyph stretched to hundreds of thousands of pixels (`\fscy10000000`,
+  or a style's ScaleY) could take minutes and gigabytes to outline. Shapes
+  wider or taller than 131,072 pixels are no longer drawn (the limit was
+  2^20), and widening an outline is capped at a cost about 45 times that of
+  a full-frame 1080p glyph with `\bord100`. Found by the fuzzer.
+- `fuzz_render` reports inputs that take 5 s or more by iteration number, and
+  `VSFM_FUZZ_DUMP=N` saves iteration N's input.
+
 ## 1.2.0
 
 ### Identical output on every platform

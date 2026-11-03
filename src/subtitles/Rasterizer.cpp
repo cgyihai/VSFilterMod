@@ -329,6 +329,10 @@ bool Rasterizer::AppendPath(const vsfm::GlyphPath& path, long dx, long dy, bool 
     return true;
 }
 
+/* Limits on what is drawn, in eighths of a pixel; see ScanConvert. */
+static const int64_t kMaxShapeExtent = (int64_t)1 << 20;
+static const int64_t kMaxShapeArea = (int64_t)1 << 34;
+
 bool Rasterizer::ScanConvert()
 {
     size_t lastmoveto = -1;
@@ -386,15 +390,15 @@ bool Rasterizer::ScanConvert()
         return true;
     }
 
-    /* A shape no screen could show -- "m -2147483648 0 l 400 0 ..." -- would
-     * otherwise be scan-converted and filled in full: billions of pixels,
-     * minutes of work and gigabytes of memory for one frame. Anything wider
-     * or taller than 2^20 pixels, or larger than 2^28 pixels in area (thirty
-     * 4K frames), is not drawn. Width and height here are in eighths of a
-     * pixel. */
+    /* A shape no screen could show -- "m -2147483648 0 l 400 0 ..." or a
+     * glyph stretched by \fscy10000000 -- would otherwise be scan-converted
+     * and filled in full: tens of millions of spans, gigabytes of memory and
+     * minutes of work for one frame. Anything wider or taller than 2^17
+     * pixels (thirty times an 8K frame), or larger than 2^28 pixels in area
+     * (thirty 4K frames), is not drawn. Width and height here are in eighths
+     * of a pixel. */
     const int64_t width = maxx + 1 - minx, height = maxy + 1 - miny;
-    if(width > ((int64_t)1 << 23) || height > ((int64_t)1 << 23)
-       || width * height > ((int64_t)1 << 34))
+    if(width > kMaxShapeExtent || height > kMaxShapeExtent || width * height > kMaxShapeArea)
     {
         mWidth = mHeight = 0;
         mPathOffsetX = mPathOffsetY = 0;
@@ -672,7 +676,15 @@ bool Rasterizer::CreateWidenedRegion(int rx, int ry)
      * minutes per frame. Past the limits ScanConvert applies to shapes, the
      * word is not drawn. Units are eighths of a pixel. */
     const int64_t w = (int64_t)mWidth + 2 * (int64_t)rx, h = (int64_t)mHeight + 2 * (int64_t)ry;
-    if(w > ((int64_t)1 << 23) || h > ((int64_t)1 << 23) || w * h > ((int64_t)1 << 34))
+    /* The widening below overlaps the whole outline once per row of the
+     * border's half circle, so its cost is the product of the two: a glyph
+     * stretched a million pixels tall with \fscy and a border scaled with it
+     * passes the size limits and would still take hours. Real subtitles stay
+     * far below this bound: a full-frame 1080p glyph with \bord100, or a
+     * 3000-pixel one with \bord300, does about 1/45 of it. */
+    const int64_t work = (2 * (int64_t)ry + 1) * (int64_t)mOutline.size();
+    if(w > kMaxShapeExtent || h > kMaxShapeExtent || w * h > kMaxShapeArea
+       || work > ((int64_t)1 << 30))
     {
         mWidth = mHeight = 0;
         mOutline.clear();
