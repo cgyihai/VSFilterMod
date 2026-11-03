@@ -8,6 +8,11 @@
 #include "../compat/cstring_compat.h"
 #include "../compat/text_compat.h"
 
+#if !defined(_WIN32)
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
+
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_OUTLINE_H
@@ -1190,7 +1195,8 @@ struct FontEngine::Impl
      * author embedding a font is asking for. */
     struct MemoryFont
     {
-        std::shared_ptr<FontData> data;
+        std::shared_ptr<FontData> data;   // an attachment's bytes, or null
+        std::string path;                 // else the file, loaded on first use
         int faceIndex = 0;
         int weight = FW_NORMAL;     // OS/2 usWeightClass
         bool italic = false;
@@ -1202,6 +1208,14 @@ struct FontEngine::Impl
     std::map<std::wstring, MemoryFont> memoryFullNames;
 
     const MemoryFont* FindMemoryFont(const std::wstring& lowerName, int weight, bool italic) const;
+
+    /* What each requested font resolved to, once per family, weight and
+     * slant; see FontEngine::Resolutions. */
+    std::vector<Resolution> resolutions;
+    std::set<std::wstring> recorded;
+    bool logToStderr = false;
+    void Record(const FontDesc& desc, const std::wstring& family, const char* source,
+                const std::string& path, bool exact);
 
     /* Font files are read into memory once and shared by every size that uses
      * them. Besides saving re-reads, this sidesteps FT_New_Face's use of
@@ -1272,6 +1286,12 @@ FontEngine::~FontEngine() {}
 FontEngine& FontEngine::Get()
 {
     static FontEngine inst;
+    static std::once_flag init;
+    std::call_once(init, [] {
+        const char* log = std::getenv("VSFM_FONT_LOG");
+        inst.m_impl->logToStderr = log && *log && std::strcmp(log, "0") != 0;
+        inst.AddFontDirectoriesFromEnvironment();
+    });
     return inst;
 }
 
@@ -1391,28 +1411,25 @@ void CollectNames(FT_Face face, std::set<std::wstring>* families, std::set<std::
 
 } // namespace
 
-bool FontEngine::AddMemoryFont(const void* data, size_t len)
+int FontEngine::RegisterFaces(const unsigned char* bytes, size_t len,
+                              const std::shared_ptr<FontData>& keep,
+                              const std::string& path)
 {
-    if (!data || len == 0) return false;
-
-    auto fd = std::make_shared<FontData>();
-    fd->bytes.assign((const unsigned char*)data, (const unsigned char*)data + len);
-
-    /* Register every face in the blob: a .ttc attachment carries several. */
-    bool added = false;
+    /* Register every face in the blob: a .ttc carries several. */
+    int added = 0;
     long faceCount = 1;
 
     for (long i = 0; i < faceCount; ++i) {
         std::set<std::wstring> families, fullNames;
         Impl::MemoryFont mf;
-        mf.data = fd;
+        mf.data = keep;
+        mf.path = path;
         mf.faceIndex = (int)i;
 
         {
             std::lock_guard<std::mutex> g(Library::Get().lock);
             FT_Face probe = nullptr;
-            if (FT_New_Memory_Face(Library::Get().ft, fd->bytes.data(),
-                                   (FT_Long)fd->bytes.size(), i, &probe) != 0)
+            if (FT_New_Memory_Face(Library::Get().ft, bytes, (FT_Long)len, i, &probe) != 0)
                 break;
 
             if (i == 0) faceCount = probe->num_faces > 0 ? probe->num_faces : 1;
@@ -1437,10 +1454,160 @@ bool FontEngine::AddMemoryFont(const void* data, size_t len)
         }
         for (const std::wstring& name : fullNames)
             m_impl->memoryFullNames.emplace(ToLower(name), mf);   // first face wins
-        added = true;
+        ++added;
     }
 
     return added;
+}
+
+bool FontEngine::AddMemoryFont(const void* data, size_t len)
+{
+    if (!data || len == 0) return false;
+
+    auto fd = std::make_shared<FontData>();
+    fd->bytes.assign((const unsigned char*)data, (const unsigned char*)data + len);
+    return RegisterFaces(fd->bytes.data(), fd->bytes.size(), fd, std::string()) > 0;
+}
+
+namespace {
+
+bool HasFontExtension(const std::string& name)
+{
+    const size_t dot = name.rfind('.');
+    if (dot == std::string::npos) return false;
+    std::string ext = name.substr(dot + 1);
+    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+    return ext == "ttf" || ext == "otf" || ext == "ttc" || ext == "otc";
+}
+
+/* Font files under `dir` (UTF-8), recursively, in a stable order. */
+void ListFontFiles(const std::string& dir, int depth, std::vector<std::string>* out)
+{
+    if (depth > 8) return;
+
+    std::vector<std::string> files, subdirs;
+#if defined(_WIN32)
+    const std::wstring pattern = vsfm::U82W(dir.c_str(), dir.size()) + L"\\*";
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(pattern.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        const std::wstring wname = fd.cFileName;
+        if (wname == L"." || wname == L"..") continue;
+        const std::string name = vsfm::W2U8(wname.c_str(), wname.size());
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) subdirs.push_back(dir + "\\" + name);
+        else if (HasFontExtension(name)) files.push_back(dir + "\\" + name);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+#else
+    DIR* d = opendir(dir.c_str());
+    if (!d) return;
+    while (struct dirent* e = readdir(d)) {
+        const std::string name = e->d_name;
+        if (name == "." || name == "..") continue;
+        const std::string full = dir + "/" + name;
+        struct stat st;
+        if (stat(full.c_str(), &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) subdirs.push_back(full);
+        else if (S_ISREG(st.st_mode) && HasFontExtension(name)) files.push_back(full);
+    }
+    closedir(d);
+#endif
+
+    std::sort(files.begin(), files.end());
+    std::sort(subdirs.begin(), subdirs.end());
+    out->insert(out->end(), files.begin(), files.end());
+    for (const std::string& sub : subdirs) ListFontFiles(sub, depth + 1, out);
+}
+
+bool ReadWholeFile(const std::string& path, std::vector<unsigned char>* bytes)
+{
+#if defined(_WIN32)
+    const std::wstring wide = vsfm::U82W(path.c_str(), path.size());
+    FILE* fp = _wfopen(wide.c_str(), L"rb");
+#else
+    FILE* fp = std::fopen(path.c_str(), "rb");
+#endif
+    if (!fp) return false;
+    std::fseek(fp, 0, SEEK_END);
+    const long size = std::ftell(fp);
+    std::fseek(fp, 0, SEEK_SET);
+    bool ok = size > 0;
+    if (ok) {
+        bytes->resize((size_t)size);
+        ok = std::fread(bytes->data(), 1, (size_t)size, fp) == (size_t)size;
+    }
+    std::fclose(fp);
+    return ok;
+}
+
+} // namespace
+
+int FontEngine::AddFontDirectory(const std::string& dir)
+{
+    std::vector<std::string> files;
+    ListFontFiles(dir, 0, &files);
+
+    /* Each file is read once to learn its names and then let go; its bytes
+     * are loaded again only if a script uses it. */
+    int added = 0;
+    for (const std::string& path : files) {
+        std::vector<unsigned char> bytes;
+        if (ReadWholeFile(path, &bytes))
+            added += RegisterFaces(bytes.data(), bytes.size(), nullptr, path);
+    }
+    return added;
+}
+
+void FontEngine::AddFontDirectoriesFromEnvironment()
+{
+    const char* env = std::getenv("VSFM_FONT_DIRS");
+    if (!env || !*env) return;
+
+#if defined(_WIN32)
+    const char sep = ';';
+#else
+    const char sep = ':';
+#endif
+    std::string list = env;
+    size_t start = 0;
+    while (start <= list.size()) {
+        size_t end = list.find(sep, start);
+        if (end == std::string::npos) end = list.size();
+        if (end > start) AddFontDirectory(list.substr(start, end - start));
+        start = end + 1;
+    }
+}
+
+std::vector<FontEngine::Resolution> FontEngine::Resolutions() const
+{
+    std::lock_guard<std::mutex> g(m_impl->lock);
+    return m_impl->resolutions;
+}
+
+void FontEngine::Impl::Record(const FontDesc& desc, const std::wstring& family,
+                              const char* source, const std::string& path, bool exact)
+{
+    const std::wstring key = ToLower(family) + L"|" + std::to_wstring(desc.weight)
+                           + (desc.italic ? L"|i" : L"|r");
+    if (!recorded.insert(key).second) return;
+
+    Resolution r;
+    r.requested = desc.faceName;
+    r.weight = desc.weight;
+    r.italic = desc.italic;
+    r.source = source;
+    r.path = path;
+    r.exact = exact;
+    resolutions.push_back(r);
+
+    if (logToStderr) {
+        const std::string name = vsfm::W2U8(r.requested.c_str(), r.requested.size());
+        std::fprintf(stderr, "vsfiltermod: font \"%s\" %d%s -> %s%s%s%s\n",
+                     name.c_str(), r.weight, r.italic ? " italic" : "", r.source.c_str(),
+                     r.path.empty() ? "" : " ", r.path.c_str(),
+                     r.exact ? "" : " (substituted: not installed)");
+    }
 }
 
 const FontEngine::Impl::MemoryFont* FontEngine::Impl::FindMemoryFont(
@@ -1516,17 +1683,24 @@ std::shared_ptr<FontFace> FontEngine::OpenFontImpl(const FontDesc& desc, bool ex
     /* Script-embedded fonts take priority over anything installed. */
     const Impl::MemoryFont* mem = m_impl->FindMemoryFont(ToLower(family), desc.weight, desc.italic);
     if (mem) {
-        blob = mem->data;
+        blob = mem->data ? mem->data : m_impl->LoadBlob(mem->path, mem->faceIndex);
         match.faceIndex = mem->faceIndex;
         match.exactFamily = true;
         /* Whether bold/italic must be faked depends on what the attachment
          * already is; decided in Build, once the face is open. */
         fromMemory = true;
+        if (!exactOnly)
+            m_impl->Record(desc, family, mem->data ? "attached" : "font directory",
+                           mem->path, true);
     } else {
         if (!FontProvider::Get().Match(family, desc.weight, desc.italic,
-                                       desc.charSet, &match))
+                                       desc.charSet, &match)) {
+            if (!exactOnly) m_impl->Record(desc, family, "missing", std::string(), false);
             return nullptr;
+        }
         if (exactOnly && !match.exactFamily) return nullptr;
+        if (!exactOnly)
+            m_impl->Record(desc, family, "installed", match.path, match.exactFamily);
         blob = m_impl->LoadBlob(match.path, match.faceIndex);
     }
 

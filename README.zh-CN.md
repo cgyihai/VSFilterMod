@@ -109,7 +109,22 @@ vsfmrender --size 1920x1080 --fps 23.976 input.ass output.xml
 | `-t, --title TEXT` | 写入索引的标题 |
 | `--first N` / `--last N` | 导出的帧范围 |
 | `--no-crop` | 输出整帧图片（相当于 avs2bdnxml 的 `-a0`） |
+| `--fontdir DIR` | 优先使用 `DIR`（含子目录）中的字体，先于系统已安装字体；可重复指定 |
+| `--font-report` | 列出字幕用到的每个字体实际解析到了哪个字体文件 |
+| `--strict-fonts` | 只要有字体被替换，就以退出码 3 失败 |
 | `-q, --quiet` | 不显示进度 |
+
+### 让每台机器用上相同的字体
+
+字幕指定的字体如果本机没有安装，就会被平台自动替换——Windows、macOS、Linux
+替换成的字体各不相同。三种方法可以避免：
+
+- **把字体嵌入字幕**（`[Fonts]`，例如 Aegisub 的“附件”功能）。
+- **共享一个字体文件夹。** 其中的字体与内嵌字体一样被查找，并且优先于已安装字体。
+  vsfmrender 用 `--fontdir DIR`；Aegisub 和 AviSynth 则设置环境变量 `VSFM_FONT_DIRS`
+  （多个文件夹在 Windows 上用 `;` 分隔，其他平台用 `:`）。
+- **检查。** vsfmrender 渲染结束后会列出所有被替换的字体，加 `--strict-fonts` 则视为错误。
+  Aegisub 和 AviSynth 中可设置 `VSFM_FONT_LOG=1`，在解析每个字体时打印结果。
 
 ## 编译
 

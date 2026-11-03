@@ -72,19 +72,29 @@ def embed_font(script_path, out_path):
         fh.write("\n".join(lines) + "\n")
 
 
-def render(renderer, script, out_dir):
+def render(renderer, script, out_dir, use_fontdir=False):
+    """Renders `script` with the fonts in fonts/ either embedded into it as
+    [Fonts] attachments or, with use_fontdir, passed with --fontdir."""
     name = os.path.splitext(os.path.basename(script))[0]
-    work = os.path.join(out_dir, name)
+    work = os.path.join(out_dir, name + ("-fontdir" if use_fontdir else ""))
     os.makedirs(work, exist_ok=True)
     for stale in glob.glob(os.path.join(work, "*")):
         os.remove(stale)
 
-    embedded = os.path.join(work, name + ".ass")
-    embed_font(script, embedded)
+    source = os.path.join(work, name + ".ass")
+    if use_fontdir:
+        with open(script, "r", encoding="utf-8-sig") as fh:
+            text = fh.read()
+        with open(source, "w", encoding="utf-8-sig", newline="\n") as fh:
+            fh.write(text)
+        extra = ["--fontdir", os.path.join(HERE, "fonts")]
+    else:
+        embed_font(script, source)
+        extra = []
 
     xml_path = os.path.join(work, name + ".xml")
-    subprocess.run([renderer, "--quiet", "--size", SIZE, "--fps", FPS,
-                    embedded, xml_path], check=True)
+    subprocess.run([renderer, "--quiet", "--size", SIZE, "--fps", FPS] + extra +
+                   [source, xml_path], check=True)
 
     entries = []
     root = ET.parse(xml_path).getroot()
@@ -112,6 +122,15 @@ def main():
     manifest = []
     for script in sorted(glob.glob(os.path.join(HERE, "*.ass"))):
         manifest += render(args.renderer, script, args.out)
+
+    # A font directory must find fonts exactly as attachments are found.
+    names = [e for e in manifest if e.startswith("names ")]
+    via_dir = render(args.renderer, os.path.join(HERE, "names.ass"), args.out,
+                     use_fontdir=True)
+    if via_dir != names:
+        print("FAIL: names.ass renders differently with --fontdir than with "
+              "the same fonts embedded")
+        return 1
 
     text = "\n".join(manifest) + "\n"
     with open(os.path.join(args.out, "manifest.txt"), "w", newline="\n") as fh:

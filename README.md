@@ -112,7 +112,25 @@ vsfmrender --size 1920x1080 --fps 23.976 input.ass output.xml
 | `-t, --title TEXT` | Title recorded in the index |
 | `--first N` / `--last N` | Frame range to export |
 | `--no-crop` | Full-frame images (avs2bdnxml `-a0`) |
+| `--fontdir DIR` | Use the fonts in `DIR` (recursively) ahead of installed ones; repeatable |
+| `--font-report` | List what every font the script uses resolved to |
+| `--strict-fonts` | Exit with status 3 if any font had to be substituted |
 | `-q, --quiet` | No progress output |
+
+### Same fonts on every machine
+
+A script that names a font the machine does not have gets whatever the
+platform substitutes — a different font on Windows, macOS and Linux. Three
+ways to rule that out:
+
+- **Embed the fonts** in the script (`[Fonts]`, e.g. Aegisub's *Attachments*).
+- **Share a font folder.** Fonts in it are found exactly like embedded ones,
+  ahead of installed fonts. `vsfmrender --fontdir DIR`; for Aegisub and
+  AviSynth set the `VSFM_FONT_DIRS` environment variable (several folders
+  separated by `;` on Windows, `:` elsewhere).
+- **Check.** `vsfmrender` names every substituted font after rendering, and
+  `--strict-fonts` makes that an error. For Aegisub and AviSynth, set
+  `VSFM_FONT_LOG=1` to print each font as it is resolved.
 
 ## Building
 

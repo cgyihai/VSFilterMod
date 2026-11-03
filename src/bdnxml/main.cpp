@@ -3,6 +3,8 @@
  */
 
 #include "bdnxml_writer.h"
+#include "../font/font_engine.h"
+#include "../compat/vsfm_compat.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -28,6 +30,10 @@ void Usage(const char* argv0)
         "      --first N        first frame to export\n"
         "      --last N         last frame to export\n"
         "      --no-crop        write full-frame images (avs2bdnxml -a0)\n"
+        "      --fontdir DIR    use the fonts in DIR (recursively) ahead of\n"
+        "                       installed ones; may be repeated\n"
+        "      --font-report    list what every font the script uses resolved to\n"
+        "      --strict-fonts   fail (exit 3) if any font had to be substituted\n"
         "  -q, --quiet          suppress progress output\n"
         "  -h, --help           this message\n",
         argv0);
@@ -109,7 +115,7 @@ int main(int argc, char** argv)
 {
     vsfm::BdnOptions opt;
     std::string input, output;
-    bool quiet = false;
+    bool quiet = false, fontReport = false, strictFonts = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -140,6 +146,14 @@ int main(int argc, char** argv)
         else if (a == "--first") opt.firstFrame = std::atoi(next("--first"));
         else if (a == "--last") opt.lastFrame = std::atoi(next("--last"));
         else if (a == "--no-crop") opt.crop = false;
+        else if (a == "--fontdir") {
+            const char* dir = next("--fontdir");
+            const int n = vsfm::FontEngine::Get().AddFontDirectory(dir);
+            if (n == 0) std::fprintf(stderr, "vsfmrender: warning: no fonts found in %s\n", dir);
+            else if (!quiet) std::fprintf(stderr, "%d font faces from %s\n", n, dir);
+        }
+        else if (a == "--font-report") fontReport = true;
+        else if (a == "--strict-fonts") strictFonts = true;
         else if (!a.empty() && a[0] == '-' && a != "-") {
             std::fprintf(stderr, "vsfmrender: unknown option %s\n", a.c_str());
             return 2;
@@ -163,6 +177,26 @@ int main(int argc, char** argv)
     if (!vsfm::RenderBdnXml(input, output, opt, &progress, &error)) {
         std::fprintf(stderr, "\nvsfmrender: %s\n", error.c_str());
         return 1;
+    }
+
+    /* A font the machine does not have is replaced by whatever the platform
+     * picks, which differs between Windows, macOS and Linux. */
+    int substituted = 0;
+    for (const vsfm::FontEngine::Resolution& r : vsfm::FontEngine::Get().Resolutions()) {
+        const bool ok = r.exact && r.source != "missing";
+        if (!ok) ++substituted;
+        if (fontReport || (!ok && !quiet)) {
+            const std::string name = vsfm::W2U8(r.requested.c_str(), r.requested.size());
+            std::fprintf(stderr, "%s \"%s\" weight %d%s: %s%s%s\n",
+                         ok ? "font" : "SUBSTITUTED font", name.c_str(), r.weight,
+                         r.italic ? " italic" : "", r.source.c_str(),
+                         r.path.empty() ? "" : " ", r.path.c_str());
+        }
+    }
+    if (strictFonts && substituted) {
+        std::fprintf(stderr, "vsfmrender: %d font(s) not available; output depends on "
+                     "this machine's substitutes\n", substituted);
+        return 3;
     }
 
     return 0;
