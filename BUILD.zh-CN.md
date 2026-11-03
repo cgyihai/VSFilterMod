@@ -6,7 +6,7 @@
 
 | 产物 | 说明 |
 | --- | --- |
-| `vsfiltermod.dll` / `.so` / `.dylib` | **CSRI** 字幕渲染插件，Aegisub 在所有平台上都以这种形式加载；同时也是 **AviSynth+** 插件（`TextSubMod` / `MaskSubMod`）。 |
+| `vsfiltermod.dll` / `.so` / `.dylib` | **CSRI** 字幕渲染插件，Aegisub 在所有平台上都以这种形式加载；同时也是 **AviSynth+** 插件（`TextSubMod` / `MaskSubMod`）和 **VapourSynth** 插件（`vsfm.TextSubMod`）。 |
 | `vsfmrender` | 命令行工具，把字幕渲染成 **BDN+XML**（一个索引文件，加上每个事件一张 PNG）。 |
 
 两者使用同一套渲染器源码，所以导出到 BDN+XML 的字幕与 Aegisub 预览的画面逐像素相同。
@@ -126,6 +126,11 @@ AddressSanitizer 和 UndefinedBehaviorSanitizer 下运行测试和模糊测试�
 
 最后的 `consistency` 任务会汇总所有平台的结果，列出哪些平台一致、在哪些事件上不一致。
 
+`vapoursynth` 任务在 Linux（x86_64 与 aarch64）、macOS（arm64 与 x86_64）和
+Windows x64 上从 PyPI 安装 VapourSynth，把插件载入其中并运行 `vapoursynth` 测试：
+每个平台的输出都必须与 `tests/vsplugin/expected.txt` 一致。其他环境中如果没有安装
+`vapoursynth` Python 模块，该测试会被跳过。
+
 两点说明：
 
 * **ARM Linux 编译机只对公开仓库免费。** 如果仓库是私有的，请删除 `ubuntu-24.04-arm`
@@ -202,6 +207,33 @@ VFR 选帧相同。
 AviSynth 不是链接时依赖。插件在加载时从加载它的 AviSynth 模块解析 C API，所以在没有安装
 AviSynth 的机器上，同一个文件仍能作为 CSRI 插件加载。用 `-Davisynth=false` 编译可以去掉
 这些入口函数。
+
+## VapourSynth
+
+同一个库也是 VapourSynth 插件，基于 API 4（VapourSynth R55 及更新版本），标识符、
+命名空间和参数都与原版相同：
+
+```python
+clip = core.vsfm.TextSubMod(clip, "subs.ass", charset=1, fps=23.976, vfr="timecodes.txt")
+```
+
+`file` 和 `vfr` 是 UTF-8 路径（在 Windows 上仍和原版一样接受 ANSI 路径）。`fps`
+默认取片段的帧率；可变帧率片段必须指定 `fps` 或 `vfr`。
+
+| 片段 | 渲染方式 |
+| --- | --- |
+| YUV420P8 | 与原版相同：YV12 字幕图层转换与混合。 |
+| RGB24 | 与原版相同：原版在帧副本上做的 RGB32 打包混合。 |
+| 4:2:0 和 4:2:2 YUV，9–16 位 | 同样的算法，作用于完整采样。 |
+| YUV422P8、灰度、8 位以上 RGB | 同样的算法，按片段自身位深计算。 |
+
+原版支持 YUV420P10 和 P16 的方式，是把每个采样拆成两个 8 位的一半，只在高位一半上
+绘制；`accurate=1` 时两半都绘制，颜色会出错。这里 `accurate` 仍可传入，但会被忽略。
+在 8 位下精确的背景上，高位深的亮度右移到 8 位后与 8 位输出完全相同；
+`tests/vsplugin/run.py` 在 `vapoursynth` 测试中检查这一点，并比对输出摘要。
+4:4:4 YUV 会被拒绝，因为字幕的色度按像素对计算；请转换为 RGB。浮点片段同样不支持。
+
+用 `-Dvapoursynth=false` 编译可以去掉这个入口函数。
 
 ## 与原版对比
 

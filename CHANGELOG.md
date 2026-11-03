@@ -2,6 +2,45 @@
 
 **English** | [简体中文](CHANGELOG.zh-CN.md)
 
+## 1.3.0
+
+### VapourSynth
+
+- New: the plugin is also a VapourSynth plugin, `vsfm.TextSubMod(clip, file,
+  charset, fps, vfr, accurate)`, with the identifier, namespace and arguments
+  of upstream's, written against API 4 (VapourSynth R55 and later).
+- YUV420P8 and RGB24 render exactly as upstream's filter did. 9- to 16-bit
+  YUV 4:2:0 and 4:2:2, YUV422P8, Gray and high-bit-depth RGB are blended with
+  the same arithmetic at the clip's own precision, instead of upstream's
+  split into two 8-bit halves; `accurate=` is accepted and has no effect.
+- CI loads it into VapourSynth on Linux, macOS and Windows and checks the
+  output against one `tests/vsplugin/expected.txt`.
+- The AviSynth+ and VapourSynth entry points share one render path
+  (`src/vsfilter/sub_source.cpp`); AviSynth output is unchanged.
+
+### Fixes
+
+- A glyph stretched to hundreds of thousands of pixels (`\fscy10000000`,
+  or a style's ScaleY) could take minutes and gigabytes to outline. Shapes
+  wider or taller than 131,072 pixels are no longer drawn (the limit was
+  2^20), and widening an outline is capped at a cost about 45 times that of
+  a full-frame 1080p glyph with `\bord100`. Found by the fuzzer.
+- A header line with no value -- `YCbCr Matrix:`, `Collisions:`,
+  `ScaledBorderAndShadow:` -- threw an exception out of the parser and
+  crashed Aegisub (upstream does the same). The field keeps its default.
+- A `\clip` / `\iclip` line reaching the bottom row of the frame read one
+  row past the end of the clip mask (a heap over-read; upstream's bug, found
+  by the fuzzer under AddressSanitizer). Upstream's one-row offset of the
+  mask is kept, so clipped lines look as before; at the bottom edge the last
+  row is used.
+- No C++ exception can escape into a host any more: the CSRI, AviSynth and
+  VapourSynth entry points catch them, and a format reader that throws fails
+  like one that finds a syntax error.
+- `tests/regressions/`: scripts that once crashed or hung, each rendered by
+  a test of its own and used as fuzzer seeds.
+- `fuzz_render` reports inputs that take 5 s or more by iteration number, and
+  `VSFM_FUZZ_DUMP=N` saves iteration N's input.
+
 ## 1.2.0
 
 ### Identical output on every platform

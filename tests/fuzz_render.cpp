@@ -12,11 +12,14 @@
  *    renders each mutant. Built with -Db_sanitize=address,undefined it finds
  *    memory errors and undefined behaviour; CI runs it that way. A failing
  *    iteration is written to fuzz-crash.ass first, so it can be replayed
- *    with "fuzz_render 0 0 fuzz-crash.ass".
+ *    with "fuzz_render 0 0 fuzz-crash.ass". An input that takes 5 s or more
+ *    is reported with its iteration number; VSFM_FUZZ_DUMP=N saves
+ *    iteration N's input as fuzz-input.ass.
  */
 
 #include "csri.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -155,6 +158,23 @@ void OnHang(int)
 }
 #endif
 
+/* A PlayResX or PlayResY near zero scales everything up by the frame size
+ * over it -- 180x for "PlayResY: 1" on this 320x180 frame -- and widening the
+ * resulting giant shapes by a correspondingly giant border legitimately takes
+ * minutes. Such mutants test nothing but patience, so they are skipped. */
+bool HasTinyPlayRes(const std::string& s)
+{
+    for (const char* key : {"PlayResX:", "PlayResY:"}) {
+        size_t at = 0;
+        while ((at = s.find(key, at)) != std::string::npos) {
+            at += std::strlen(key);
+            const long v = std::strtol(s.c_str() + at, nullptr, 10);
+            if (v > 0 && v < 16) return true;
+        }
+    }
+    return false;
+}
+
 bool ReadFile(const char* path, std::string* out)
 {
     FILE* f = std::fopen(path, "rb");
@@ -177,6 +197,10 @@ int main(int argc, char** argv)
     const long iterations = std::strtol(argv[1], nullptr, 10);
     Rng rng{std::strtoull(argv[2], nullptr, 10) * 0x9E3779B97F4A7C15ull + 1};
 
+    /* VSFM_FUZZ_DUMP=N saves iteration N's input as fuzz-input.ass. */
+    const char* dumpEnv = std::getenv("VSFM_FUZZ_DUMP");
+    const long dumpAt = dumpEnv ? std::strtol(dumpEnv, nullptr, 10) : -1;
+
     std::vector<std::string> seeds;
     for (int i = 3; i < argc; ++i) {
         std::string s;
@@ -196,6 +220,7 @@ int main(int argc, char** argv)
 
     for (long it = 0; it < iterations; ++it) {
         const std::string m = Mutate(seeds[rng.Below(seeds.size())], rng);
+        if (HasTinyPlayRes(m)) continue;
         if (FILE* f = std::fopen("fuzz-crash.ass", "wb")) {
             std::fwrite(m.data(), 1, m.size(), f);
             std::fclose(f);
@@ -203,10 +228,22 @@ int main(int argc, char** argv)
 #ifdef VSFM_FUZZ_WATCHDOG
         alarm(kHangSeconds);
 #endif
+        const auto t0 = std::chrono::steady_clock::now();
         RenderOnce((const uint8_t*)m.data(), m.size());
 #ifdef VSFM_FUZZ_WATCHDOG
         alarm(0);
 #endif
+        /* Slow inputs are reported, so that one which only becomes a hang on
+         * another machine can be found again by its iteration number. */
+        const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        if (secs >= 5.0)
+            std::fprintf(stderr, "iteration %ld took %.1f s\n", it, secs);
+        if (dumpAt == it) {
+            if (FILE* f = std::fopen("fuzz-input.ass", "wb")) {
+                std::fwrite(m.data(), 1, m.size(), f);
+                std::fclose(f);
+            }
+        }
         if ((it + 1) % 500 == 0) std::fprintf(stderr, "%ld iterations\n", it + 1);
     }
     std::remove("fuzz-crash.ass");

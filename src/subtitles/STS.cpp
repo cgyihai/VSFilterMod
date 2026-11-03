@@ -1534,18 +1534,24 @@ static bool OpenSubStationAlpha(CTextFile* file, CSimpleTextSubtitle& ret, int C
         }
         else if(entry == L"collisions")
         {
+            if(buff.IsEmpty()) continue;    // see "ycbcr matrix"
             buff = GetStr(buff);
             buff.MakeLower();
             ret.m_collisions = buff.Find(L"reverse") >= 0 ? 1 : 0;
         }
         else if(entry == L"scaledborderandshadow")
         {
+            if(buff.IsEmpty()) continue;    // see "ycbcr matrix"
             buff = GetStr(buff);
             buff.MakeLower();
             ret.m_fScaledBAS = buff.Find(L"yes") >= 0;
         }
         else if (entry == L"ycbcr matrix")
         {
+            /* "YCbCr Matrix:" with no value: GetStr would throw out of the
+             * parser -- upstream's too, and out of the host with it. A
+             * missing value leaves the default. */
+            if (buff.IsEmpty()) continue;
             buff = GetStr(buff);
             buff.MakeLower();
             if (buff.Left(4) == L"none")
@@ -1746,6 +1752,7 @@ static bool OpenSubStationAlpha(CTextFile* file, CSimpleTextSubtitle& ret, int C
 #ifdef _VSMOD // load png graphic from text resources
         else if(entry == L"filename")
         {
+            if(buff.IsEmpty()) continue;    // see "ycbcr matrix"
             ret.LoadUUEFile(file, GetStr(buff));
         }
         else if (entry == L"update details")
@@ -2904,7 +2911,20 @@ bool CSimpleTextSubtitle::Open(CTextFile* f, int CharSet, CString name)
 
     for(ptrdiff_t i = 0; i < nOpenFuncts; i++)
     {
-        if(!OpenFuncts[i].open(f, *this, CharSet) /*|| !GetCount()*/)
+        /* The readers signal a malformed field by throwing (GetStr, GetInt),
+         * and most catch it per line. One that escapes fails that reader,
+         * as a syntax error does, instead of unwinding into the host. */
+        bool opened;
+        try
+        {
+            opened = OpenFuncts[i].open(f, *this, CharSet);
+        }
+        catch(...)
+        {
+            opened = false;
+        }
+
+        if(!opened /*|| !GetCount()*/)
         {
             if(GetCount() > 0)
             {

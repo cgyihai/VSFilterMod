@@ -41,9 +41,7 @@
 
 #include "../compat/vsfm_compat.h"
 #include "vsfm_version.h"
-#include "../subtitles/RTS.h"
-#include "../subpic/mem_subpic.h"
-#include "vfr.h"
+#include "sub_source.h"
 
 #define AVSC_NO_DECLSPEC
 #include "avisynth/avisynth_c.h"
@@ -56,7 +54,6 @@
 #define VSFM_AVS_EXPORT extern "C" __declspec(dllexport)
 #else
 #include <dlfcn.h>
-#include <sys/stat.h>
 #define VSFM_AVS_EXPORT extern "C" __attribute__((visibility("default")))
 #endif
 
@@ -147,46 +144,6 @@ bool LoadAvsApi()
 }
 
 // ---------------------------------------------------------------------------
-// Paths
-// ---------------------------------------------------------------------------
-
-bool FileExists(const std::wstring& path)
-{
-#if defined(_WIN32)
-    const DWORD attr = GetFileAttributesW(path.c_str());
-    return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
-#else
-    struct stat st;
-    const std::string n = vsfm::W2U8(path.c_str(), path.size());
-    return stat(n.c_str(), &st) == 0 && S_ISREG(st.st_mode);
-#endif
-}
-
-/* A path from an AviSynth script. On Windows it is in the ANSI code page --
- * that is how upstream read it (MFC's CString(const char*)) -- unless
- * AviSynth+ is running the script as UTF-8. Take the ANSI reading when it
- * names a file, else the UTF-8 one. Elsewhere scripts are UTF-8. */
-std::wstring ScriptPath(const char* s)
-{
-    if (!s) return std::wstring();
-#if defined(_WIN32)
-    auto convert = [s](UINT cp) {
-        const int n = MultiByteToWideChar(cp, 0, s, -1, nullptr, 0);
-        std::wstring w(n > 0 ? (size_t)n : 0, L'\0');
-        if (n > 0) MultiByteToWideChar(cp, 0, s, -1, &w[0], n);
-        if (!w.empty() && w.back() == L'\0') w.pop_back();
-        return w;
-    };
-    const std::wstring ansi = convert(CP_ACP);
-    if (FileExists(ansi)) return ansi;
-    const std::wstring utf8 = convert(CP_UTF8);
-    return FileExists(utf8) ? utf8 : ansi;
-#else
-    return vsfm::U82W(s, std::strlen(s));
-#endif
-}
-
-// ---------------------------------------------------------------------------
 // The filter
 // ---------------------------------------------------------------------------
 
@@ -196,25 +153,13 @@ std::wstring ScriptPath(const char* s)
  * read the variable at render time exactly as upstream's GetFrame did. */
 const char* const kRgbaVar = "RGBA";
 
-/* The subpicture queue's frame rate, which upstream's AviSynth path never
- * set. RTS only uses it for frame-timed formats (MicroDVD). */
-const double kQueueFps = 25.0;
-
 bool s_swapUV = false;
 
 struct TextSubFilter
 {
     std::mutex lock;
-    CCritSec rtsLock;
-    std::unique_ptr<CRenderedTextSubtitle> rts;
-    std::unique_ptr<vsfm::MemSubPic> subpic;
-    std::unique_ptr<VFRTranslator> vfr;
+    vsfm::SubtitleSource source;
     float fps = -1;              // upstream m_fps; <= 0 means "use the clip's"
-    int matrix = vsfm::YCC_MATRIX_AUTO;
-    int range = vsfm::YCC_RANGE_AUTO;
-
-    /* The queue's cached subpicture interval. */
-    REFERENCE_TIME cachedStart = 0, cachedStop = 0;
 };
 
 int SubPicTypeFor(AVS_FilterInfo* fi)
@@ -268,40 +213,12 @@ AVS_VideoFrame* AVSC_CC GetFrame(AVS_FilterInfo* fi, int n)
     const float fps = f->fps > 0 ? f->fps
                                  : (float)fi->vi.fps_numerator / (float)fi->vi.fps_denominator;
 
-    REFERENCE_TIME rt;
-    if (!f->vfr) {
-        volatile float num = (float)(10000000LL * (long long)n);
-        volatile float q = num / fps;
-        rt = (REFERENCE_TIME)q;
-    } else {
-        rt = (REFERENCE_TIME)(10000000 * f->vfr->TimeStampFromFrameNumber(n));
-    }
+    const REFERENCE_TIME rt = f->source.Timestamp(n, fps);
+    const vsfm::MemSubPic* subpic = f->source.Render(rt, type, dst.w, dst.h);
 
-    // CMemSubPicAllocator: one subpicture, typed after the first frame's clip.
-    if (!f->subpic)
-        f->subpic.reset(new vsfm::MemSubPic(dst.w, dst.h, type, f->matrix, f->range));
-
-    // CSubPicQueueNoThread::LookupSubPic
-    bool have = f->cachedStart <= rt && rt < f->cachedStop;
-    if (!have) {
-        CAutoLock rtsGuard(&f->rtsLock);
-        POSITION pos = f->rts->GetStartPosition(rt, kQueueFps);
-        if (pos) {
-            // IsAnimated() is always true, so the interval is [rt, rt + 1).
-            const REFERENCE_TIME start = rt, stop = rt + 1;
-            SubPicDesc& spd = f->subpic->Lock();
-            CRect r(0, 0, 0, 0);
-            f->rts->Render(spd, (start + stop) / 2, kQueueFps, r);
-            f->subpic->Unlock(r);
-            f->cachedStart = start;
-            f->cachedStop = stop;
-            have = true;
-        }
-    }
-
-    if (have) {
+    if (subpic) {
         if (type == MSP_RGB32 || type == MSP_RGB24) dst.h = -dst.h;
-        f->subpic->AlphaBlt(dst);
+        subpic->AlphaBlt(dst);
     }
 
     return frame;
@@ -325,18 +242,11 @@ AVS_Value MakeTextSub(AVS_ScriptEnvironment* env, AVS_Value child, const char* f
     std::unique_ptr<TextSubFilter> f(new TextSubFilter());
     f->fps = fps;
 
-    if (vfrPath) {
-        f->vfr = GetVFRTranslator(ScriptPath(vfrPath));
-        if (!f->vfr)
-            return Error(env, std::string(name) + ": cannot read VFR timecodes \"" + vfrPath + "\"");
-    }
+    if (vfrPath && !f->source.OpenVfr(vsfm::ScriptPath(vfrPath, false)))
+        return Error(env, std::string(name) + ": cannot read VFR timecodes \"" + vfrPath + "\"");
 
-    f->rts.reset(new CRenderedTextSubtitle(&f->rtsLock));
-    if (!f->rts->Open(CString(ScriptPath(fn).c_str()), charset))
+    if (!f->source.Open(vsfm::ScriptPath(fn, false), charset))
         return Error(env, std::string(name) + ": Can't open \"" + fn + "\"");
-
-    f->matrix = f->rts->m_eYCbCrMatrix;
-    f->range = f->rts->m_eYCbCrRange;
 
     AVS_FilterInfo* fi = nullptr;
     AVS_Clip* clip = g_avs.new_c_filter(env, &fi, child, 1);
@@ -353,7 +263,7 @@ AVS_Value MakeTextSub(AVS_ScriptEnvironment* env, AVS_Value child, const char* f
 }
 
 // TextSubMod(clip, [file]s, [charset]i, [fps]f, [vfr]s)
-AVS_Value AVSC_CC TextSubCreate(AVS_ScriptEnvironment* env, AVS_Value args, void* user_data)
+AVS_Value TextSubCreateUnguarded(AVS_ScriptEnvironment* env, AVS_Value args, void* user_data)
 {
     const char* name = (const char*)user_data;
     AVS_Value clip = avs_array_elt(args, 0);
@@ -373,7 +283,7 @@ AVS_Value AVSC_CC TextSubCreate(AVS_ScriptEnvironment* env, AVS_Value args, void
 }
 
 // MaskSubMod([file]s, [width]i, [height]i, [fps]f, [length]i, [charset]i, [vfr]s)
-AVS_Value AVSC_CC MaskSubCreate(AVS_ScriptEnvironment* env, AVS_Value args, void* user_data)
+AVS_Value MaskSubCreateUnguarded(AVS_ScriptEnvironment* env, AVS_Value args, void* user_data)
 {
     const char* name = (const char*)user_data;
     AVS_Value file   = avs_array_elt(args, 0);
@@ -410,6 +320,26 @@ AVS_Value AVSC_CC MaskSubCreate(AVS_ScriptEnvironment* env, AVS_Value args, void
                                 name);
     g_avs.release_value(black);
     return ret;
+}
+
+/* No C++ exception may unwind into AviSynth (an allocation failure, say);
+ * the render path itself does not throw (SubtitleSource). */
+AVS_Value AVSC_CC TextSubCreate(AVS_ScriptEnvironment* env, AVS_Value args, void* user_data)
+{
+    try {
+        return TextSubCreateUnguarded(env, args, user_data);
+    } catch (...) {
+        return Error(env, std::string((const char*)user_data) + ": out of memory");
+    }
+}
+
+AVS_Value AVSC_CC MaskSubCreate(AVS_ScriptEnvironment* env, AVS_Value args, void* user_data)
+{
+    try {
+        return MaskSubCreateUnguarded(env, args, user_data);
+    } catch (...) {
+        return Error(env, std::string((const char*)user_data) + ": out of memory");
+    }
 }
 
 // TextSubModSwapUV(bool)

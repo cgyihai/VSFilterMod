@@ -416,7 +416,7 @@ jobs:
           # printed so a failure can be reproduced.
           seed=${{ github.run_number }}
           echo "fuzz seed: $seed"
-          ../build/fuzz_render 3000 "$seed" ../tests/*.ass ../tests/consistency/*.ass
+          ../build/fuzz_render 3000 "$seed" ../tests/*.ass ../tests/consistency/*.ass ../tests/regressions/*.ass
 
       - name: Upload the failing input
         if: failure()
@@ -424,6 +424,80 @@ jobs:
         with:
           name: fuzz-crash
           path: fuzz/fuzz-crash.ass
+          if-no-files-found: ignore
+
+  # The VapourSynth entry point, loaded into VapourSynth from PyPI on every
+  # platform it publishes wheels for. tests/vsplugin/run.py checks the
+  # output against one expected.txt, so these must agree with one another.
+  vapoursynth:
+    name: VapourSynth (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux x86_64, os: ubuntu-24.04 }
+          - { name: Linux aarch64, os: ubuntu-24.04-arm }
+          - { name: macOS arm64, os: macos-15 }
+          - { name: macOS x86_64, os: macos-15-intel }
+          - { name: Windows x86_64, os: windows-latest }
+    env:
+      VSFM_REQUIRE_VAPOURSYNTH: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Meson, Ninja, VapourSynth and NumPy
+        run: python -m pip install --upgrade meson ninja vapoursynth numpy
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config zlib1g-dev libfontconfig1-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install pkg-config
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure and build
+        if: runner.os != 'Windows'
+        run: |
+          meson setup build $SUBPROJECT_ARGS -Dbdnxml=false
+          meson compile -C build
+
+      - name: Configure and build (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        env:
+          CC: cl
+          CXX: cl
+        run: |
+          meson setup build %SUBPROJECT_ARGS% -Dbdnxml=false -Db_vscrt=static_from_buildtype -Dzlib:default_library=static
+          meson compile -C build
+
+      - name: Test
+        if: runner.os != 'Windows'
+        run: meson test -C build --print-errorlogs vapoursynth
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: meson test -C build --print-errorlogs vapoursynth
+
+      - name: Upload the manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vapoursynth-${{ matrix.os }}
+          path: build/vsplugin/manifest.txt
           if-no-files-found: ignore
 
   # Every build job checks its own rendering against expected.txt. This job
@@ -454,7 +528,7 @@ jobs:
   release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, macos-universal, mingw, sanitizers, consistency]
+    needs: [build, macos-universal, mingw, sanitizers, consistency, vapoursynth]
     runs-on: ubuntu-latest
     permissions:
       contents: write

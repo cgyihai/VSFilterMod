@@ -6,7 +6,7 @@ VSFilterMod builds two things:
 
 | Target | What it is |
 | --- | --- |
-| `vsfiltermod.dll` / `.so` / `.dylib` | A **CSRI** subtitle renderer plugin — the form Aegisub loads on every platform — that is also an **AviSynth+** plugin (`TextSubMod` / `MaskSubMod`). |
+| `vsfiltermod.dll` / `.so` / `.dylib` | A **CSRI** subtitle renderer plugin — the form Aegisub loads on every platform — that is also an **AviSynth+** plugin (`TextSubMod` / `MaskSubMod`) and a **VapourSynth** plugin (`vsfm.TextSubMod`). |
 | `vsfmrender` | A command line tool that renders a script to **BDN+XML** (an index plus one PNG per event). |
 
 Both are built from the same renderer sources, so a subtitle exported to
@@ -138,6 +138,12 @@ nothing fails the build instead of producing empty subtitles.
 A final `consistency` job collects every platform's results and prints which
 platforms agree, and on which events they do not.
 
+A `vapoursynth` job installs VapourSynth from PyPI on Linux (x86_64 and
+aarch64), macOS (arm64 and x86_64) and Windows x64, loads the plugin into it
+and runs the `vapoursynth` test: every platform's output must match
+`tests/vsplugin/expected.txt`. Elsewhere that test is skipped when the
+`vapoursynth` Python module is not installed.
+
 Two notes:
 
 * **ARM Linux runners are free for public repositories only.** If this repo is
@@ -229,6 +235,37 @@ AviSynth is not a link-time dependency. The plugin resolves the C API from
 the AviSynth module that loaded it, so the same file still loads as a CSRI
 plugin on a machine with no AviSynth. Build with `-Davisynth=false` to leave
 the entry points out.
+
+## VapourSynth
+
+The same library is a VapourSynth plugin, written against API 4 (VapourSynth
+R55 and later), with upstream's identifier, namespace and arguments:
+
+```python
+clip = core.vsfm.TextSubMod(clip, "subs.ass", charset=1, fps=23.976, vfr="timecodes.txt")
+```
+
+`file` and `vfr` are UTF-8 paths (on Windows, an ANSI path is still accepted,
+as upstream accepted it). `fps` defaults to the clip's; a variable-frame-rate
+clip needs `fps` or `vfr`.
+
+| Clip | Rendering |
+| --- | --- |
+| YUV420P8 | Upstream's: the YV12 subpicture conversion and blend. |
+| RGB24 | Upstream's: the packed RGB32 blend it ran on a copy of the frame. |
+| YUV 4:2:0 and 4:2:2, 9–16 bit | The same arithmetic on whole samples. |
+| YUV422P8, Gray, RGB above 8 bit | The same arithmetic at the clip's depth. |
+
+Upstream supported YUV420P10 and P16 by splitting each sample into two 8-bit
+halves and drawing on the high half — or, with `accurate=1`, on both, which
+gives wrong colours. Here `accurate` is accepted and ignored. On a background
+that is exact at 8 bits, high-bit-depth luma shifted down to 8 bits equals
+the 8-bit output exactly; `tests/vsplugin/run.py` checks that, with the
+output's digests, in the `vapoursynth` test. YUV 4:4:4 is rejected, because
+the subtitle's chroma is computed per pixel pair; convert to RGB for it.
+Float clips are rejected too.
+
+Build with `-Dvapoursynth=false` to leave the entry point out.
 
 ## Comparing against upstream
 

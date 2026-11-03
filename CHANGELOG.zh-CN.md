@@ -2,6 +2,37 @@
 
 [English](CHANGELOG.md) | **简体中文**
 
+## 1.3.0
+
+### VapourSynth
+
+- 新增：插件同时也是 VapourSynth 插件，`vsfm.TextSubMod(clip, file, charset, fps,
+  vfr, accurate)`，标识符、命名空间和参数都与原版相同，基于 API 4（VapourSynth R55
+  及更新版本）。
+- YUV420P8 和 RGB24 的渲染结果与原版滤镜完全相同。9 到 16 位的 4:2:0 与 4:2:2 YUV、
+  YUV422P8、灰度和高位深 RGB 按同样的算法以片段自身精度混合，不再像原版那样拆成两个
+  8 位的一半；`accurate=` 仍可传入，但不起作用。
+- CI 在 Linux、macOS 和 Windows 上把插件载入 VapourSynth，并用同一个
+  `tests/vsplugin/expected.txt` 检查输出。
+- AviSynth+ 与 VapourSynth 入口共用一套渲染流程（`src/vsfilter/sub_source.cpp`），
+  AviSynth 的输出不变。
+
+### 修复
+
+- 被拉伸到几十万像素的字形（`\fscy10000000` 或样式的 ScaleY）在描边时可能耗费
+  数分钟和数 GB 内存。现在宽或高超过 131072 像素的图形不再绘制（原上限为 2^20），
+  描边扩展的计算量也设了上限，约为 1080p 全屏字形加 `\bord100` 的 45 倍。由模糊测试发现。
+- 没有值的标头行（`YCbCr Matrix:`、`Collisions:`、`ScaledBorderAndShadow:`）
+  会让解析器抛出异常并导致 Aegisub 崩溃（原版同样如此）。现在这些字段保持默认值。
+- 到达画面最后一行的 `\clip` / `\iclip` 行会越过裁剪遮罩末尾读取一行（堆越界读，
+  原版的 bug，由 AddressSanitizer 下的模糊测试发现）。原版遮罩错开一行的行为保持不变，
+  被裁剪的行外观与以前相同；在画面底边改用最后一行。
+- C++ 异常不会再传入宿主程序：CSRI、AviSynth 和 VapourSynth 入口都会捕获异常，
+  抛出异常的格式解析器按语法错误处理。
+- `tests/regressions/`：曾导致崩溃或卡死的字幕，每个都有单独的测试，并作为模糊测试的种子。
+- `fuzz_render` 会按迭代编号报告耗时 5 秒以上的输入，`VSFM_FUZZ_DUMP=N` 可保存第 N
+  次迭代的输入。
+
 ## 1.2.0
 
 ### 所有平台输出一致

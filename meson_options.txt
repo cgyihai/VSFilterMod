@@ -11,3 +11,6 @@ option('tests', type : 'boolean', value : true,
 
 option('avisynth', type : 'boolean', value : true,
     description : 'Include the AviSynth+ entry points (TextSubMod, MaskSubMod) in the plugin')
+
+option('vapoursynth', type : 'boolean', value : true,
+    description : 'Include the VapourSynth entry point (vsfm.TextSubMod) in the plugin')
