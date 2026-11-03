@@ -1623,8 +1623,17 @@ BYTE MOD_MOVEVC::GetAlphaValue(int wx, int wy)
     BYTE alpham;
     if(!enable)
     {
-//		return 0xFF;
-        return alphamask[wx+((hfull-wy)*spd.cx)];
+        /* The callers count wy down from h - 1 to 0, so pixel row r of the
+         * drawn area reads mask row r + 1: upstream's clip mask sits one row
+         * off, and every clipped line looks that way, so it is kept. A line
+         * that reaches the last row of the frame then read one row past the
+         * end of the mask (a heap over-read); it takes the last row instead. */
+        int rows = spd.cy;
+        if(size.cy > 0 && size.cy < rows) rows = size.cy;
+        int row = hfull - wy;
+        if(row > rows - 1 - curpos.y) row = rows - 1 - curpos.y;
+        if(row < -curpos.y) row = -curpos.y;
+        return alphamask[wx + row * spd.cx];
     }
 
     int xInCanvas = wx - pos.x + curpos.x;

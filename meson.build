@@ -312,7 +312,7 @@ if get_option('tests')
     # each must render to BDN+XML, with at least one event, within the time
     # limit. They are fuzzer seeds too.
     if get_option('bdnxml')
-        foreach name : ['empty-header-values', 'huge-stretch']
+        foreach name : ['clip-bottom-edge', 'empty-header-values', 'huge-stretch']
             test('regression-' + name, vsfmrender,
                  args : ['--quiet', '--size', '640x360', '--fps', '25',
                          files('tests/regressions' / name + '.ass'),

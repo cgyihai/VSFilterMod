@@ -28,6 +28,11 @@
 - A header line with no value -- `YCbCr Matrix:`, `Collisions:`,
   `ScaledBorderAndShadow:` -- threw an exception out of the parser and
   crashed Aegisub (upstream does the same). The field keeps its default.
+- A `\clip` / `\iclip` line reaching the bottom row of the frame read one
+  row past the end of the clip mask (a heap over-read; upstream's bug, found
+  by the fuzzer under AddressSanitizer). Upstream's one-row offset of the
+  mask is kept, so clipped lines look as before; at the bottom edge the last
+  row is used.
 - No C++ exception can escape into a host any more: the CSRI, AviSynth and
   VapourSynth entry points catch them, and a format reader that throws fails
   like one that finds a syntax error.
