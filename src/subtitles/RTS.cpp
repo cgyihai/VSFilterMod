@@ -3151,11 +3151,12 @@ struct LSub
     int idx, layer, readorder;
 };
 
-static int lscomp(const void* ls1, const void* ls2)
+/* Layer, then read order; stable, so equal keys keep the segment's order on
+ * every platform (see CSimpleTextSubtitle::Sort). */
+static bool LSubLess(const LSub& a, const LSub& b)
 {
-    int ret = ((LSub*)ls1)->layer - ((LSub*)ls2)->layer;
-    if(!ret) ret = ((LSub*)ls1)->readorder - ((LSub*)ls2)->readorder;
-    return(ret);
+    if(a.layer != b.layer) return a.layer < b.layer;
+    return a.readorder < b.readorder;
 }
 
 HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double fps, RECT& bbox)
@@ -3205,7 +3206,7 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
         subs.Add(ls);
     }
 
-    qsort(subs.GetData(), subs.GetCount(), sizeof(LSub), lscomp);
+    std::stable_sort(subs.GetData(), subs.GetData() + subs.GetCount(), LSubLess);
 
     for(ptrdiff_t i = 0, j = subs.GetCount(); i < j; i++)
     {

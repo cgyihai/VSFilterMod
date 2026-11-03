@@ -2786,28 +2786,26 @@ void CSimpleTextSubtitle::SetStr(int i, CStringW str, bool fUnicode)
     else stse.str = str;
 }
 
-static int comp1(const void* a, const void* b)
-{
-    int ret = ((STSEntry*)a)->start - ((STSEntry*)b)->start;
-    if(ret == 0) ret = ((STSEntry*)a)->layer - ((STSEntry*)b)->layer;
-    if(ret == 0) ret = ((STSEntry*)a)->readorder - ((STSEntry*)b)->readorder;
-    return(ret);
-}
-
-static int comp2(const void* a, const void* b)
-{
-    return(((STSEntry*)a)->readorder - ((STSEntry*)b)->readorder);
-}
-
+/* Upstream sorted with qsort and comparators that subtracted: the
+ * subtraction overflows for extreme values, and qsort is not stable -- glibc
+ * and MSVC order equal entries differently -- so events with equal keys (a
+ * repeated ReadOrder from CSRI data, say) could stack differently on each
+ * platform. A stable sort with plain comparisons gives one order everywhere. */
 void CSimpleTextSubtitle::Sort(bool fRestoreReadorder)
 {
-    qsort(GetData(), GetCount(), sizeof(STSEntry), !fRestoreReadorder ? comp1 : comp2);
+    STSEntry* first = GetData();
+    STSEntry* last = first + GetCount();
+    if(!fRestoreReadorder)
+        std::stable_sort(first, last, [](const STSEntry& a, const STSEntry& b) {
+            if(a.start != b.start) return a.start < b.start;
+            if(a.layer != b.layer) return a.layer < b.layer;
+            return a.readorder < b.readorder;
+        });
+    else
+        std::stable_sort(first, last, [](const STSEntry& a, const STSEntry& b) {
+            return a.readorder < b.readorder;
+        });
     CreateSegments();
-}
-
-static int intcomp(const void* i1, const void* i2)
-{
-    return(*((int*)i1) - *((int*)i2));
 }
 
 void CSimpleTextSubtitle::CreateSegments()
@@ -2825,7 +2823,11 @@ void CSimpleTextSubtitle::CreateSegments()
         breakpoints.Add(stse.end);
     }
 
-    qsort(breakpoints.GetData(), breakpoints.GetCount(), sizeof(int), intcomp);
+    /* std::sort with a real comparison: upstream's qsort comparator returned
+     * i1 - i2, which overflows for extreme times and then orders differently
+     * under each C library's qsort. (qsort was also handed a null pointer
+     * for a script with no events.) */
+    std::sort(breakpoints.GetData(), breakpoints.GetData() + breakpoints.GetCount());
 
     int* ptr = breakpoints.GetData(), prev = ptr ? *ptr : NULL;
 
