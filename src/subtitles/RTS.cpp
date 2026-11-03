@@ -1650,7 +1650,12 @@ void CRenderedTextSubtitle::ParsePolygon(CSubtitle* sub, CStringW str, STSStyle&
 {
     if(!sub || !str.GetLength() || !m_nPolygon) return;
 
-    if(CWord* w = DNew CPolygon(style, str, m_ktype, m_kstart, m_kend, sub->m_scalex / (1 << (m_nPolygon - 1)), sub->m_scaley / (1 << (m_nPolygon - 1)), m_polygonBaselineOffset))
+    /* \pN draws at 1/2^(N-1) scale. Upstream's 1 << (N - 1) is undefined for
+     * N > 32 or N < 1, and the CPUs disagree: x86 shifts by the count modulo
+     * 32, ARM by the full count (giving 0). x86's result, which is upstream's,
+     * on every platform. */
+    const int div = (int)(1u << ((unsigned)(m_nPolygon - 1) & 31));
+    if(CWord* w = DNew CPolygon(style, str, m_ktype, m_kstart, m_kend, sub->m_scalex / div, sub->m_scaley / div, m_polygonBaselineOffset))
     {
         sub->m_words.AddTail(w);
         m_kstart = m_kend;
@@ -2123,7 +2128,7 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             else if(params.GetCount() == 2 && !sub->m_pClipper)
             {
                 int scale = std::max<long>(vsfm::WcsToL(p, NULL, 10), 1);
-                sub->m_pClipper = DNew CClipper(params[1], CSize(m_size.cx >> 3, m_size.cy >> 3), sub->m_scalex / (1 << (scale - 1)), sub->m_scaley / (1 << (scale - 1)), invert);
+                sub->m_pClipper = DNew CClipper(params[1], CSize(m_size.cx >> 3, m_size.cy >> 3), sub->m_scalex / (int)(1u << ((unsigned)(scale - 1) & 31)), sub->m_scaley / (int)(1u << ((unsigned)(scale - 1) & 31)), invert);  // see ParsePolygon
             }
             else if(params.GetCount() == 4)
             {
