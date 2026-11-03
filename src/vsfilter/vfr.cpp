@@ -24,6 +24,26 @@
 
 namespace {
 
+/* sscanf(s, "%d,%d,%f") == 3, with a locale-independent %f. */
+bool ParseRangeLine(const char* s, int* start, int* end, float* fps)
+{
+    char* e = nullptr;
+    long v = std::strtol(s, &e, 10);
+    if (e == s || *e != ',') return false;
+    *start = (int)v;
+
+    s = e + 1;
+    v = std::strtol(s, &e, 10);
+    if (e == s || *e != ',') return false;
+    *end = (int)v;
+
+    s = e + 1;
+    const float f = vsfm::StrToF(s, &e);
+    if (e == s) return false;
+    *fps = f;
+    return true;
+}
+
 // Work in seconds per frame (spf) rather than fps: it is the natural unit for
 // the translation being done.
 class TimecodesV1 : public VFRTranslator
@@ -70,15 +90,17 @@ public:
             if (buf[0] == '#') continue;
 
             if (_strnicmp(buf, "Assume ", 7) == 0 && default_spf < 0) {
-                default_spf = std::atof(buf + 7);
+                default_spf = vsfm::StrToD(buf + 7, nullptr);
                 default_spf = default_spf > 0 ? 1 / default_spf : -1;
                 temp_section.spf = default_spf;
                 continue;
             }
 
-            int start_frame, end_frame;
-            float fps;
-            if (std::sscanf(buf, "%d,%d,%f", &start_frame, &end_frame, &fps) == 3) {
+            /* "start,end,fps", read the way sscanf("%d,%d,%f") did, but with
+             * '.' as the decimal point whatever the host's locale. */
+            int start_frame = 0, end_frame = 0;
+            float fps = 0;
+            if (ParseRangeLine(buf, &start_frame, &end_frame, &fps)) {
                 temp_section.end_frame = start_frame - 1;
                 if (temp_section.end_frame >= temp_section.start_frame) {
                     cur_time += (temp_section.end_frame - temp_section.start_frame + 1) * temp_section.spf;
@@ -125,7 +147,7 @@ public:
 
         while (std::fgets(buf, sizeof(buf), vfrfile)) {
             if (buf[0] == '#') continue;
-            timestamps.push_back(std::atof(buf) / 1000);
+            timestamps.push_back(vsfm::StrToD(buf, nullptr) / 1000);
         }
 
         if (!timestamps.empty()) {

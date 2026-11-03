@@ -15,6 +15,7 @@
 #include "atlcoll_compat.h"
 #include "sync_compat.h"
 #include "text_compat.h"
+#include "num_compat.h"
 #include "subpic_desc.h"
 
 #include <cmath>

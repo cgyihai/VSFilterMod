@@ -620,9 +620,9 @@ static bool OpenSubViewer(CTextFile* file, CSimpleTextSubtitle& ret, int CharSet
                 if(tag == L"font")
                     font = def.fontName.CompareNoCase(WToT(param)) ? param : CStringW();
                 else if(tag == L"colf")
-                    color = def.colors[0] != wcstol(((LPCWSTR)param) + 2, 0, 16) ? param : CStringW();
+                    color = def.colors[0] != vsfm::WcsToL(((LPCWSTR)param) + 2, 0, 16) ? param : CStringW();
                 else if(tag == L"size")
-                    size = def.fontSize != wcstol(param, 0, 10) ? param : CStringW();
+                    size = def.fontSize != vsfm::WcsToL(param, 0, 10) ? param : CStringW();
                 else if(tag == L"style")
                 {
                     if(param.Find(L"no") >= 0)
@@ -787,9 +787,8 @@ static CStringW MicroDVD2SSA(CStringW str, bool fUnicode, int CharSet)
                     fRestore[FONTSIZE] = (iswupper(code[1]) == 0);
                     code.MakeLower();
 
-                    float size;
-                    swscanf(code, L"{s:%f", &size);
-                    code.Format(L"{\\fs%f}", size);
+                    const float size = vsfm::WcsToF((LPCWSTR)code + 3, NULL);
+                    code = L"{\\fs" + CStringW(vsfm::FormatFloatW(size).c_str()) + L"}";
                     ret += code;
                 }
                 else if(!wcsnicmp(code, L"{h:", 3))
@@ -1045,7 +1044,7 @@ static CStringW SMI2SSA(CStringW str, int CharSet)
                     DWORD val;
                     if(g_colors.Lookup(CString(arg), val))
                         color = (DWORD)val;
-                    else if((color = wcstol(arg, NULL, 16)) == 0)
+                    else if((color = vsfm::WcsToL(arg, NULL, 16)) == 0)
                         color = 0x00ffffff;  // default is white
 
                     arg.Format(L"%02x%02x%02x", color & 0xff, (color >> 8) & 0xff, (color >> 16) & 0xff);
@@ -1090,7 +1089,7 @@ static CStringW SMI2SSA(CStringW str, int CharSet)
                 CString key = WToT(arg);
                 void* val;
                 if(g_colors.Lookup(key, val)) color = (DWORD)val;
-                else color = wcstol(arg, NULL, 16);
+                else color = vsfm::WcsToL(arg, NULL, 16);
 
                 arg.Format(L"%02x%02x%02x", color&0xff, (color>>8)&0xff, (color>>16)&0xff);
             }
@@ -1251,14 +1250,22 @@ int GetInt(CStringW& buff, char sep = ',') //throw(...)
     str = GetStr(buff, sep);
     str.MakeLower();
 
-    CStringW fmtstr = str.GetLength() > 2 && (str.Left(2) == L"&h" || str.Left(2) == L"0x")
-                      ? str = str.Mid(2), L"%x"
-                              : L"%d";
+    int base = 10;
+    if(str.GetLength() > 2 && (str.Left(2) == L"&h" || str.Left(2) == L"0x"))
+    {
+        str = str.Mid(2);
+        base = 16;
+    }
 
-    int ret;
-    if(swscanf(str, fmtstr, &ret) != 1) throw 1;
+    /* Upstream used swscanf's %d / %x, whose result is undefined when the
+     * value does not fit an int -- e.g. a colour written in decimal with an
+     * alpha byte, 4294967295. Here it wraps to 32 bits, on every platform. */
+    const wchar_t* s = str;
+    wchar_t* e = NULL;
+    const long long v = std::wcstoll(s, &e, base);
+    if(e == s) throw 1;
 
-    return(ret);
+    return (int)(uint32_t)(unsigned long long)v;
 }
 
 double GetFloat(CStringW& buff, char sep = ',') //throw(...)
@@ -1268,8 +1275,12 @@ double GetFloat(CStringW& buff, char sep = ',') //throw(...)
     str = GetStr(buff, sep);
     str.MakeLower();
 
-    float ret;
-    if(swscanf(str, L"%f", &ret) != 1) throw 1;
+    /* swscanf's %f, but always with '.' as the decimal point, whatever
+     * locale the host application has set. */
+    const wchar_t* s = str;
+    wchar_t* e = NULL;
+    const float ret = vsfm::WcsToF(s, &e);
+    if(e == s) throw 1;
 
     return((double)ret);
 }

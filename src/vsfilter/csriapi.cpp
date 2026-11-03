@@ -237,14 +237,14 @@ static void vsfilter_push_packet(csri_inst *inst, const void *packet, size_t pac
     Explode(str, sl, ',', fields);
     if(sl.GetCount() == fields)
     {
-        stse.readorder = wcstol(sl.RemoveHead(), NULL, 10);
-        stse.layer = wcstol(sl.RemoveHead(), NULL, 10);
+        stse.readorder = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
+        stse.layer = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
         stse.style = sl.RemoveHead();
         stse.actor = sl.RemoveHead();
-        stse.marginRect.left = wcstol(sl.RemoveHead(), NULL, 10);
-        stse.marginRect.right = wcstol(sl.RemoveHead(), NULL, 10);
-        stse.marginRect.top = stse.marginRect.bottom = wcstol(sl.RemoveHead(), NULL, 10);
-        if(fields == 10) stse.marginRect.bottom = wcstol(sl.RemoveHead(), NULL, 10);
+        stse.marginRect.left = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
+        stse.marginRect.right = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
+        stse.marginRect.top = stse.marginRect.bottom = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
+        if(fields == 10) stse.marginRect.bottom = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
         stse.effect = sl.RemoveHead();
         stse.str = sl.RemoveHead();
     }

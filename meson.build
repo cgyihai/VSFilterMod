@@ -137,6 +137,7 @@ vsfm_src = files(
     'src/compat/text_compat.cpp',
     'src/compat/cpu_compat.cpp',
     'src/compat/det_float.cpp',
+    'src/compat/num_compat.cpp',
 
     'src/font/font_engine.cpp',
 
@@ -211,6 +212,13 @@ if get_option('tests')
         build_by_default : false)
 
     test('det-float', det_float_test)
+
+    num_compat_test = executable('num_compat_test',
+        files('tests/num_compat_test.cpp', 'src/compat/num_compat.cpp'),
+        include_directories : inc,
+        build_by_default : false)
+
+    test('num-compat', num_compat_test)
 
     # Renders tests/consistency/*.ass with the bundled font embedded, and
     # requires every event's pixels to match tests/consistency/expected.txt.
