@@ -100,16 +100,23 @@ macOS 上可以从终端启动 Aegisub，查看加载器的警告信息。
 
 ## 持续集成
 
-`.github/workflows/ci.yml` 编译并测试六种配置：
+`.github/workflows/ci.yml` 编译并测试八种配置：
 
-| 任务 | 工具链 | 字体后端 | 依赖来源 |
+| 任务 | 运行环境 | 工具链 | 字体后端 |
 | --- | --- | --- | --- |
-| Linux x86_64 | GCC | fontconfig | apt |
-| Linux aarch64 | GCC | fontconfig | apt |
-| macOS arm64（`macos-15`） | Clang | CoreText | Meson 子项目，静态链接 |
-| macOS x86_64（`macos-15-intel`） | Clang | CoreText | Meson 子项目，静态链接 |
-| Windows x86_64（MSVC） | MSVC | DirectWrite | Meson 子项目，全部静态链接 |
-| Windows x86_64（MinGW） | GCC | DirectWrite | MSYS2 |
+| Linux x86_64 | `ubuntu-22.04` | GCC | fontconfig |
+| Linux aarch64 | `ubuntu-22.04-arm` | GCC | fontconfig |
+| macOS arm64 | `macos-15` | Clang | CoreText |
+| macOS x86_64 | `macos-15-intel` | Clang | CoreText |
+| Windows x86_64 | `windows-latest` | MSVC | DirectWrite |
+| Windows x86 | `windows-latest` | MSVC（x64 → x86） | DirectWrite |
+| Windows ARM64 | `windows-11-arm` | MSVC | DirectWrite |
+| Windows x86_64（MinGW） | `windows-latest` | GCC，MSYS2 软件包 | DirectWrite |
+
+除 MinGW 外，都从固定版本的子项目编译 FreeType 和 libpng 并静态链接（Linux 上用
+`--exclude-libs` 私有链接），所以每个发布的二进制文件都使用同一个 FreeType。
+`macos-universal` 任务用 `lipo` 合并两个 macOS 版本；`sanitizers` 任务在
+AddressSanitizer 和 UndefinedBehaviorSanitizer 下运行测试和模糊测试。
 
 每个任务都会运行 `csri-abi` 测试（按 Aegisub 加载器的方式加载插件并渲染）和
 `render-consistency` 测试（要求本平台对 `tests/consistency/*.ass` 的渲染与 `expected.txt`

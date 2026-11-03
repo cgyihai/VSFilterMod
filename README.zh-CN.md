@@ -50,15 +50,20 @@ Z 坐标、竖向间距等。
 
 | 平台 | 压缩包 | 内容 |
 | --- | --- | --- |
-| Windows x86_64 | `vsfiltermod-windows-x86_64-msvc` | `vsfiltermod.dll`、`vsfmrender.exe`，单文件即可用，无需额外 DLL |
+| Windows x86_64 | `vsfiltermod-windows-x86_64-msvc` | `vsfiltermod.dll`、`vsfmrender.exe` |
+| Windows x86（32 位） | `vsfiltermod-windows-x86-msvc` | `vsfiltermod.dll`、`vsfmrender.exe`，用于 32 位的 Aegisub、AviSynth+ 和 avs2bdnxml |
+| Windows ARM64 | `vsfiltermod-windows-arm64-msvc` | `vsfiltermod.dll`、`vsfmrender.exe` |
 | Linux x86_64 | `vsfiltermod-linux-x86_64` | `vsfiltermod.so`、`vsfmrender` |
 | Linux aarch64 | `vsfiltermod-linux-aarch64` | `vsfiltermod.so`、`vsfmrender` |
+| macOS 通用 | `vsfiltermod-macos-universal` | `vsfiltermod.dylib`、`vsfmrender`，Apple Silicon 与 Intel 二合一 |
 | macOS Apple Silicon | `vsfiltermod-macos-arm64` | `vsfiltermod.dylib`、`vsfmrender` |
 | macOS Intel | `vsfiltermod-macos-x86_64` | `vsfiltermod.dylib`、`vsfmrender` |
 
-macOS 版本与 Windows 版本一样是自包含的：FreeType 和 libpng 已静态链接进去，
-版本与 Windows 版相同。Linux 版本使用系统的 FreeType、libpng 和 fontconfig，
-请用包管理器安装。
+所有版本都静态链接了同一固定版本的 FreeType 和 libpng，因此渲染结果完全相同。
+Windows 版本无需额外 DLL。macOS 版本不依赖系统以外的任何库，支持 macOS 11 及以上
+（Apple Silicon）和 10.15 及以上（Intel）。Linux 版本只依赖 fontconfig 和 zlib
+（所有桌面发行版都有），支持 glibc 2.35 及以上（Ubuntu 22.04、Debian 12、Fedora 36
+及更新版本）。每个正式版都附带 `SHA256SUMS` 校验文件。
 
 ## 使用方法
 
@@ -91,8 +96,8 @@ MaskSubMod("subtitle.ass", 1920, 1080, 23.976, 3000)   # RGBA 输出，给 avs2b
 # TextSubMod("subtitle.ass")
 ```
 
-任何通过 AviSynth+ 加载脚本的 64 位 avs2bdnxml 都能使用。
-32 位程序无法加载 64 位插件。
+任何通过 AviSynth+ 加载脚本的 avs2bdnxml 都能使用：32 位的 avs2bdnxml 或
+AviSynth+ 请用 32 位（`windows-x86`）版本，否则用 64 位版本。
 
 ### vsfmrender
 

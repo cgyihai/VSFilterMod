@@ -108,16 +108,24 @@ terminal to see the loader's warnings.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` builds and tests six configurations:
+`.github/workflows/ci.yml` builds and tests eight configurations:
 
-| Job | Toolchain | Font backend | Dependencies |
+| Job | Runner | Toolchain | Font backend |
 | --- | --- | --- | --- |
-| Linux x86_64 | GCC | fontconfig | apt |
-| Linux aarch64 | GCC | fontconfig | apt |
-| macOS arm64 (`macos-15`) | Clang | CoreText | Meson subprojects, static |
-| macOS x86_64 (`macos-15-intel`) | Clang | CoreText | Meson subprojects, static |
-| Windows x86_64 (MSVC) | MSVC | DirectWrite | Meson subprojects, all static |
-| Windows x86_64 (MinGW) | GCC | DirectWrite | MSYS2 |
+| Linux x86_64 | `ubuntu-22.04` | GCC | fontconfig |
+| Linux aarch64 | `ubuntu-22.04-arm` | GCC | fontconfig |
+| macOS arm64 | `macos-15` | Clang | CoreText |
+| macOS x86_64 | `macos-15-intel` | Clang | CoreText |
+| Windows x86_64 | `windows-latest` | MSVC | DirectWrite |
+| Windows x86 | `windows-latest` | MSVC (x64 → x86) | DirectWrite |
+| Windows ARM64 | `windows-11-arm` | MSVC | DirectWrite |
+| Windows x86_64 (MinGW) | `windows-latest` | GCC, MSYS2 packages | DirectWrite |
+
+All but MinGW build FreeType and libpng from the pinned subprojects and link
+them statically (on Linux privately, with `--exclude-libs`), so every
+released binary uses the same FreeType. A `macos-universal` job merges the two
+macOS builds with `lipo`; a `sanitizers` job runs the tests and the fuzzer
+under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 Each job runs the `csri-abi` test — which loads the plugin the way Aegisub's
 loader does and renders through it — and the `render-consistency` test, which

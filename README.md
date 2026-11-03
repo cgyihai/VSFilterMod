@@ -53,16 +53,22 @@ of any commit are under the run's *Artifacts* on the
 
 | Platform | Archive | Contents |
 | --- | --- | --- |
-| Windows x86_64 | `vsfiltermod-windows-x86_64-msvc` | `vsfiltermod.dll`, `vsfmrender.exe` — self-contained, no extra DLLs |
+| Windows x86_64 | `vsfiltermod-windows-x86_64-msvc` | `vsfiltermod.dll`, `vsfmrender.exe` |
+| Windows x86 (32-bit) | `vsfiltermod-windows-x86-msvc` | `vsfiltermod.dll`, `vsfmrender.exe` — for 32-bit Aegisub, AviSynth+ and avs2bdnxml |
+| Windows ARM64 | `vsfiltermod-windows-arm64-msvc` | `vsfiltermod.dll`, `vsfmrender.exe` |
 | Linux x86_64 | `vsfiltermod-linux-x86_64` | `vsfiltermod.so`, `vsfmrender` |
 | Linux aarch64 | `vsfiltermod-linux-aarch64` | `vsfiltermod.so`, `vsfmrender` |
+| macOS universal | `vsfiltermod-macos-universal` | `vsfiltermod.dylib`, `vsfmrender` — Apple Silicon and Intel in one |
 | macOS Apple Silicon | `vsfiltermod-macos-arm64` | `vsfiltermod.dylib`, `vsfmrender` |
 | macOS Intel | `vsfiltermod-macos-x86_64` | `vsfiltermod.dylib`, `vsfmrender` |
 
-The macOS builds are self-contained, like the Windows one: FreeType and
-libpng are linked in, at the same version as on Windows. The Linux builds use
-the system's FreeType, libpng and fontconfig — install those from your package
-manager.
+Every build has FreeType and libpng linked in, all at the same pinned version,
+so they render identically. The Windows builds need no extra DLLs. The macOS
+builds need nothing outside macOS and run on macOS 11 or later (Apple
+Silicon) and 10.15 or later (Intel). The Linux builds need only fontconfig and
+zlib, which every desktop distribution has, and run on glibc 2.35 or later
+(Ubuntu 22.04, Debian 12, Fedora 36 and newer). Each release has a
+`SHA256SUMS` file.
 
 ## Usage
 
@@ -95,8 +101,9 @@ MaskSubMod("subtitle.ass", 1920, 1080, 23.976, 3000)   # RGBA, for avs2bdnxml
 # TextSubMod("subtitle.ass")
 ```
 
-Any 64-bit avs2bdnxml that loads scripts through AviSynth+ can use it.
-32-bit hosts cannot load a 64-bit plugin.
+Any avs2bdnxml that loads scripts through AviSynth+ can use it: take the
+32-bit (`windows-x86`) build for a 32-bit avs2bdnxml or AviSynth+, the
+64-bit one otherwise.
 
 ### vsfmrender
 
