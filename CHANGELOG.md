@@ -2,6 +2,28 @@
 
 **English** | [简体中文](CHANGELOG.zh-CN.md)
 
+## 1.4.0
+
+### CSRI
+
+- New: the plugin exports `csri_typesub_tags_json()`, a self-description of
+  the extension tags this renderer understands (`\1img`..`\4img`, the
+  `\1vc`/`\1va` gradient colors and alphas, `\jitter`, `\distort`,
+  `\mover`/`\moves3`/`\moves4`/`\movevc`, the `
+nd` family, `\z`,
+  `\frs`, `\fsc`) as a static UTF-8 JSON document. Editors (TypeSub) look
+  the symbol up after loading the plugin and merge the table into
+  autocompletion, so adding a tag here no longer requires an editor release.
+  The symbol is optional: hosts that do not know it are unaffected.
+
+### Fixes
+
+- The VFR timecode reader parsed the fps column with the C locale's `%f`:
+  on systems whose locale uses a comma decimal separator the values misread
+  and frame timing drifted. Parsing is locale-independent now.
+- `csri_open_file`/`csri_open_mem` share one instance-setup path; remaining
+  POSIX portability and build documentation work.
+
 ## 1.3.0
 
 ### VapourSynth

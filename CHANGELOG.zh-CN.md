@@ -2,6 +2,25 @@
 
 [English](CHANGELOG.md) | **简体中文**
 
+## 1.4.0
+
+### CSRI
+
+- 新增：插件导出 `csri_typesub_tags_json()`——以静态 UTF-8 JSON 文档自我描述
+  渲染器认识的扩展标签（`\1img`..`\4img`、`\1vc`/`\1va` 渐变色与渐变透明度、
+  `\jitter`、`\distort`、`\mover`/`\moves3`/`\moves4`/`\movevc`、`
+nd`
+  家族、`\z`、`\frs`、`\fsc`）。编辑器（TypeSub）加载插件后查询该符号并把
+  标签表合并进自动补全，今后新增标签不再需要编辑器跟版。该符号是可选的：
+  不认识它的宿主不受影响。
+
+### 修复
+
+- VFR 时间码读取器按 C 区域设置的 `%f` 解析帧率列：在小数点用逗号的系统上
+  解析错误、帧计时漂移。现已改为区域无关解析。
+- `csri_open_file`/`csri_open_mem` 合并为同一实例初始化路径；其余 POSIX
+  移植与构建文档工作。
+
 ## 1.3.0
 
 ### VapourSynth
