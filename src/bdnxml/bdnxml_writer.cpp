@@ -10,6 +10,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <vector>
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -80,6 +82,31 @@ inline void ToMaskSubRgba(DWORD src, BYTE out[4])
     out[1] = (BYTE)(d >> 8);    // G
     out[2] = (BYTE)(d);         // B
     out[3] = (BYTE)(d >> 24);   // A
+}
+
+/* The pixels of `box`, row by row. */
+void CopyRegion(const Surface& s, const RECT& box, std::vector<DWORD>* out)
+{
+    out->clear();
+    for (int y = box.top; y < box.bottom; ++y) {
+        const DWORD* row = &s.pixels[(size_t)y * s.width];
+        out->insert(out->end(), row + box.left, row + box.right);
+    }
+}
+
+/* Whether `box` holds exactly `pixels`. A hash match alone could, however
+ * rarely, merge two different images into one event; avs2bdnxml compares
+ * the pixels themselves. */
+bool SameRegion(const Surface& s, const RECT& box, const std::vector<DWORD>& pixels)
+{
+    const size_t w = (size_t)(box.right - box.left);
+    if (pixels.size() != w * (size_t)(box.bottom - box.top)) return false;
+    const DWORD* p = pixels.data();
+    for (int y = box.top; y < box.bottom; ++y, p += w) {
+        if (std::memcmp(&s.pixels[(size_t)y * s.width + box.left], p, w * sizeof(DWORD)) != 0)
+            return false;
+    }
+    return true;
 }
 
 /* FNV-1a over the visible pixels, used to collapse runs of identical frames
@@ -397,6 +424,7 @@ bool RenderBdnXml(const std::string& subtitlePath,
     int runSegment = -1;
     uint64_t runHash = 0;
     RECT runBox = {0, 0, 0, 0};
+    std::vector<DWORD> runPixels;   // the run's image, to confirm a hash match
 
     auto closeRun = [&](int frame) {
         if (!runOpen) return;
@@ -438,7 +466,8 @@ bool RenderBdnXml(const std::string& subtitlePath,
 
         if (runOpen && hash == runHash &&        // avs2bdnxml's is_identical()
             box.left == runBox.left && box.top == runBox.top &&
-            box.right == runBox.right && box.bottom == runBox.bottom) {
+            box.right == runBox.right && box.bottom == runBox.bottom &&
+            SameRegion(surface, box, runPixels)) {
             runSegment = segment;
             continue;
         }
@@ -461,6 +490,7 @@ bool RenderBdnXml(const std::string& subtitlePath,
         runSegment = segment;
         runHash = hash;
         runBox = box;
+        CopyRegion(surface, box, &runPixels);
     }
 
     if (!aborted) closeRun(endFrame);

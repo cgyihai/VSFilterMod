@@ -159,7 +159,30 @@ public:
      * The bytes are copied. Later OpenFont calls can match `faceName`. */
     bool AddMemoryFont(const void* data, size_t len);
 
+    /* Registers every font file (.ttf, .otf, .ttc, .otc) under `dir`, a UTF-8
+     * path, recursively. They are found the way attachments are -- by every
+     * family and full name, ahead of installed fonts -- so a directory of
+     * font files shared between machines makes them render alike whatever
+     * each has installed. Directories listed in the VSFM_FONT_DIRS
+     * environment variable (separated by ';' on Windows, ':' elsewhere) are
+     * added on first use. Returns the number of faces registered. */
+    int AddFontDirectory(const std::string& dir);
+
     void ClearMemoryFonts();
+
+    /* What each font a script asked for resolved to, once per family, weight
+     * and slant, in the order first used. With VSFM_FONT_LOG=1 in the
+     * environment each one is also printed to stderr as it is resolved. */
+    struct Resolution
+    {
+        std::wstring requested;   // the face name as the script gave it
+        int weight = 0;
+        bool italic = false;
+        std::string source;       // "attached", "font directory", "installed", "missing"
+        std::string path;         // the font file, if it came from one
+        bool exact = true;        // false: the platform substituted another family
+    };
+    std::vector<Resolution> Resolutions() const;
 
 private:
     friend class FontFace;
@@ -173,6 +196,12 @@ private:
      * a fallback that the platform quietly substituted would be no fallback. */
     std::shared_ptr<FontFace> OpenExactFont(const FontDesc& desc);
     std::shared_ptr<FontFace> OpenFontImpl(const FontDesc& desc, bool exactOnly);
+
+    /* Registers the faces in a font file's bytes. `keep` holds the bytes
+     * for an attachment; for a file on disk it is null and `path` names it. */
+    int RegisterFaces(const unsigned char* bytes, size_t len,
+                      const std::shared_ptr<FontData>& keep, const std::string& path);
+    void AddFontDirectoriesFromEnvironment();
 
     /* Opens `blob` as the face `match` names, sized and styled per `desc`.
      * Caller holds m_impl->lock. */

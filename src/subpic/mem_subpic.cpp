@@ -6,10 +6,9 @@
  *
  *    - no COM, no allocator, no queue: one object per filter instance;
  *    - the 32-bit x86 inline-assembly branches are gone. Upstream's x64 build
- *      used the SSE2 intrinsics branch, which is kept, and which also covers
- *      AArch64 through sse2neon;
- *    - where no SSE2 is available, the YUY2 blend uses a scalar version that
- *      saturates exactly like the SSE2 code. Upstream's own scalar fallback
+ *      used the SSE2 intrinsics branch, which is kept on x86;
+ *    - elsewhere the YUY2 blend uses a scalar version that saturates exactly
+ *      like the SSE2 code (checked over every input). Upstream's own scalar fallback
  *      wrapped with `& 0xff` instead, so it disagreed with its SSE2 path on
  *      the pixels where the sum left 0..255;
  *    - RGB16/15, NV12, P010/P016 and AYUV are not carried over: no AviSynth
@@ -145,7 +144,145 @@ inline BYTE BlendYuy2Channel(int d, int bias, int alpha, int c)
     return (BYTE)(v < 0 ? 0 : (v > 255 ? 255 : v));
 }
 
+/* (v >> 8) rounded towards minus infinity, without relying on the
+ * implementation-defined right shift of a negative int. */
+inline int Sar8(int v) { return v >= 0 ? (v >> 8) : ~(~v >> 8); }
+
+inline int ClampSample(int v, int max) { return v < 0 ? 0 : (v > max ? max : v); }
+
+/* An 8-bit full-range value at `bits` bits: 0 -> 0, 255 -> max. */
+inline int ScaleFull(int v, int sh) { return (v << sh) | (v >> (8 - sh)); }
+
+template <typename T>
+inline T* Row(unsigned char* base, ptrdiff_t stride, int y)
+{
+    return (T*)(base + stride * y);
+}
+
+template <typename T>
+void BlendYuvPlanes(const MemSubPic::Planes& t, const BYTE* src, int pitch,
+                    const CRect& r, bool chroma)
+{
+    const int sh = t.bits - 8;
+    const int max = (1 << t.bits) - 1;
+    const bool pcLuma = RANGE[0][3] == 0;
+    const int yBias = RANGE[0][3] << sh;
+
+    for (int y = r.top; y < r.bottom; y++) {
+        const BYTE* s = src + pitch * y + r.left * 4;
+        T* d = Row<T>(t.data[0], t.stride[0], y) + r.left;
+        for (int x = r.left; x < r.right; x++, s += 4, d++) {
+            if (s[3] < 0xff) {
+                const int sv = pcLuma ? ScaleFull(s[1], sh) : (s[1] << sh);
+                *d = (T)ClampSample(Sar8(((int)*d - yBias) * s[3]) + sv, max);
+            }
+        }
+    }
+
+    if (!chroma) return;
+
+    /* Chroma: one converted U/V per horizontal pair of pixels (U in the even
+     * pixel's byte 0, V in byte 4), with the pair's alpha -- or, for 4:2:0,
+     * the average over two rows as upstream's YV12 blend took it. */
+    for (int i = 0; i < 2; i++) {
+        const int cBias = RANGE[i + 1][3] << sh;
+        for (int y = r.top; y < r.bottom; y += 1 << t.subH) {
+            const BYTE* s = src + pitch * y + r.left * 4;
+            T* d = Row<T>(t.data[i + 1], t.stride[i + 1], y >> t.subH) + (r.left >> 1);
+            for (int x = r.left; x < r.right; x += 2, s += 8, d++) {
+                int ia, sc;
+                if (t.subH) {
+                    ia = (s[3] + s[3 + pitch] + s[7] + s[7 + pitch]) >> 2;
+                    sc = (((int)s[i * 4] + s[i * 4 + pitch]) << sh) >> 1;
+                } else {
+                    ia = (s[3] + s[7]) >> 1;
+                    sc = s[i * 4] << sh;
+                }
+                if (ia < 0xff)
+                    *d = (T)ClampSample(Sar8(((int)*d - cBias) * ia) + sc, max);
+            }
+        }
+    }
+}
+
+void BlendRgbPlanes8(const MemSubPic::Planes& t, const BYTE* src, int pitch, const CRect& r)
+{
+    /* AlphaBlt's MSP_RGB32 formula on a DWORD gathered from the planes, which
+     * is how upstream's VapourSynth filter rendered RGB24 clips. */
+    for (int y = r.top; y < r.bottom; y++) {
+        const BYTE* s = src + pitch * y + r.left * 4;
+        BYTE* pr = Row<BYTE>(t.data[0], t.stride[0], y);
+        BYTE* pg = Row<BYTE>(t.data[1], t.stride[1], y);
+        BYTE* pb = Row<BYTE>(t.data[2], t.stride[2], y);
+        for (int x = r.left; x < r.right; x++, s += 4) {
+            if (s[3] < 0xff) {
+                const DWORD sp = *(const DWORD*)s;
+                const DWORD d = (DWORD)pb[x] | ((DWORD)pg[x] << 8) | ((DWORD)pr[x] << 16);
+                const DWORD o = (((((d & 0x00ff00ff) * s[3]) >> 8) + (sp & 0x00ff00ff)) & 0x00ff00ff)
+                              | (((((d & 0x0000ff00) * s[3]) >> 8) + (sp & 0x0000ff00)) & 0x0000ff00);
+                pb[x] = (BYTE)o;
+                pg[x] = (BYTE)(o >> 8);
+                pr[x] = (BYTE)(o >> 16);
+            }
+        }
+    }
+}
+
+void BlendRgbPlanes16(const MemSubPic::Planes& t, const BYTE* src, int pitch, const CRect& r)
+{
+    const int sh = t.bits - 8;
+    const int max = (1 << t.bits) - 1;
+    for (int y = r.top; y < r.bottom; y++) {
+        const BYTE* s = src + pitch * y + r.left * 4;
+        uint16_t* p[3] = {
+            Row<uint16_t>(t.data[0], t.stride[0], y),       // R
+            Row<uint16_t>(t.data[1], t.stride[1], y),       // G
+            Row<uint16_t>(t.data[2], t.stride[2], y),       // B
+        };
+        for (int x = r.left; x < r.right; x++, s += 4) {
+            if (s[3] < 0xff) {
+                for (int c = 0; c < 3; c++) {
+                    const int sv = ScaleFull(s[2 - c], sh);
+                    p[c][x] = (uint16_t)ClampSample((((int)p[c][x] * s[3]) >> 8) + sv, max);
+                }
+            }
+        }
+    }
+}
+
 } // namespace
+
+bool MemSubPic::AlphaBltPlanes(const Planes& t) const
+{
+    if (t.bits < 8 || t.bits > 16) return false;
+    if (m_rcDirty.IsRectEmpty()) return true;
+
+    const BYTE* src = (const BYTE*)m_spd.bits;
+    const int pitch = m_spd.pitch;
+
+    if (t.family == PLANES_RGB) {
+        if (m_spd.type != MSP_RGB32) return false;
+        if (t.bits == 8) BlendRgbPlanes8(t, src, pitch, m_rcDirty);
+        else BlendRgbPlanes16(t, src, pitch, m_rcDirty);
+        return true;
+    }
+
+    /* Unlock aligned the dirty area to whole chroma samples: horizontally for
+     * every YUV type, vertically as well for the planar (4:2:0) ones. */
+    if (!IsYuv(m_spd.type)) return false;
+    if (t.family == PLANES_YUV) {
+        if (t.subW != 1 || t.subH < 0 || t.subH > 1) return false;
+        if (t.subH == 1 && !IsPlanar(m_spd.type)) return false;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(s_colorConvLock);
+    ColorConvInitOther(m_matrix, m_range);
+
+    const bool chroma = t.family == PLANES_YUV;
+    if (t.bits == 8) BlendYuvPlanes<BYTE>(t, src, pitch, m_rcDirty, chroma);
+    else BlendYuvPlanes<uint16_t>(t, src, pitch, m_rcDirty, chroma);
+    return true;
+}
 
 bool IsSupportedSubPicType(int type)
 {
@@ -326,10 +463,11 @@ bool MemSubPic::AlphaBlt(SubPicDesc& target) const
                                      | ((unsigned)s2[0] << 8) | s2[1];   // v y2 u y1
 #if defined(VSFM_HAVE_SSE2)
                 if (sse2) {
-                    static const long long k8181 = 0x0080001000800010LL;
                     const unsigned int a4 = (ia << 24) | ((unsigned)s2[7] << 16) | (ia << 8) | s2[3];
                     __m128i mm_zero = _mm_setzero_si128();
-                    __m128i mm_8181 = _mm_move_epi64(_mm_cvtsi64_si128(k8181));
+                    /* 0x0080001000800010 in the low 64 bits. _mm_cvtsi64_si128,
+                     * which upstream used, exists only on x86-64. */
+                    __m128i mm_8181 = _mm_set_epi32(0, 0, 0x00800010, 0x00800010);
                     __m128i mm_c = _mm_unpacklo_epi8(_mm_cvtsi32_si128((int)c), mm_zero);
                     __m128i mm_d = _mm_unpacklo_epi8(_mm_cvtsi32_si128((int)*d2), mm_zero);
                     __m128i mm_a = _mm_unpacklo_epi8(_mm_cvtsi32_si128((int)a4), mm_zero);

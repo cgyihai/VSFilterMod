@@ -6,7 +6,7 @@ VSFilterMod builds two things:
 
 | Target | What it is |
 | --- | --- |
-| `vsfiltermod.dll` / `.so` / `.dylib` | A **CSRI** subtitle renderer plugin — the form Aegisub loads on every platform — that is also an **AviSynth+** plugin (`TextSubMod` / `MaskSubMod`). |
+| `vsfiltermod.dll` / `.so` / `.dylib` | A **CSRI** subtitle renderer plugin — the form Aegisub loads on every platform — that is also an **AviSynth+** plugin (`TextSubMod` / `MaskSubMod`) and a **VapourSynth** plugin (`vsfm.TextSubMod`). |
 | `vsfmrender` | A command line tool that renders a script to **BDN+XML** (an index plus one PNG per event). |
 
 Both are built from the same renderer sources, so a subtitle exported to
@@ -37,18 +37,23 @@ meson setup build -Dbdnxml=false              # plugin only
 meson setup build -Dtests=false
 ```
 
-### Apple Silicon and ARM Linux
+### Identical output on every platform
 
-The rasterizer's blend kernels are written against SSE2. On AArch64 they can go
-through [sse2neon](https://github.com/DLTcollab/sse2neon), a single header:
+Rendering is plain, portable C++: no code path depends on SIMD support, the
+CPU vendor or the compiler. The build passes `-ffp-contract=off` so that GCC
+and Clang never fuse `a * b + c` into an FMA instruction (which every AArch64
+CPU has, and which rounds differently). Do not build with `-ffast-math`,
+`/fp:fast` or `-ffp-contract=fast`: the `render-consistency` test will fail.
+
+`meson test` includes that test. It renders `tests/consistency/*.ass` with the
+bundled Caladea font embedded, so no installed font is involved, and requires
+every event's pixels to equal `tests/consistency/expected.txt` — the same file
+on every platform. After an intended change to rendering, regenerate it and
+commit it with the change:
 
 ```bash
-curl -LO https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h
-meson setup build -Dcpp_args=-I$PWD
+python3 tests/consistency/run.py --renderer build/src/bdnxml/vsfmrender --out build/consistency --update
 ```
-
-Without it the build still works and renders identically — it just uses the
-scalar kernels, which are slower. Meson prints which one it picked.
 
 ## Installing into Aegisub
 
@@ -103,22 +108,41 @@ terminal to see the loader's warnings.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` builds and tests six configurations:
+`.github/workflows/ci.yml` builds and tests eight configurations:
 
-| Job | Toolchain | Font backend | Dependencies |
+| Job | Runner | Toolchain | Font backend |
 | --- | --- | --- | --- |
-| Linux x86_64 | GCC | fontconfig | apt |
-| Linux aarch64 | GCC | fontconfig | apt + sse2neon |
-| macOS arm64 (`macos-15`) | Clang | CoreText | Homebrew + sse2neon |
-| macOS x86_64 (`macos-15-intel`) | Clang | CoreText | Homebrew |
-| Windows x86_64 (MSVC) | MSVC | DirectWrite | Meson subprojects, all static |
-| Windows x86_64 (MinGW) | GCC | DirectWrite | MSYS2 |
+| Linux x86_64 | `ubuntu-22.04` | GCC | fontconfig |
+| Linux aarch64 | `ubuntu-22.04-arm` | GCC | fontconfig |
+| macOS arm64 | `macos-15` | Clang | CoreText |
+| macOS x86_64 | `macos-15-intel` | Clang | CoreText |
+| Windows x86_64 | `windows-latest` | MSVC | DirectWrite |
+| Windows x86 | `windows-latest` | MSVC (x64 → x86) | DirectWrite |
+| Windows ARM64 | `windows-11-arm` | MSVC | DirectWrite |
+| Windows x86_64 (MinGW) | `windows-latest` | GCC, MSYS2 packages | DirectWrite |
+
+All but MinGW build FreeType and libpng from the pinned subprojects and link
+them statically (on Linux privately, with `--exclude-libs`), so every
+released binary uses the same FreeType. A `macos-universal` job merges the two
+macOS builds with `lipo`; a `sanitizers` job runs the tests and the fuzzer
+under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 Each job runs the `csri-abi` test — which loads the plugin the way Aegisub's
-loader does and renders through it — then renders `tests/smoke.ass` to BDN+XML
+loader does and renders through it — and the `render-consistency` test, which
+requires the job's rendering of `tests/consistency/*.ass` to match
+`expected.txt` pixel for pixel. It then renders `tests/smoke.ass` to BDN+XML
 and validates the result with `tests/check_bdnxml.py`. That validator rejects
 a fully transparent image, so a platform whose font lookup silently returns
 nothing fails the build instead of producing empty subtitles.
+
+A final `consistency` job collects every platform's results and prints which
+platforms agree, and on which events they do not.
+
+A `vapoursynth` job installs VapourSynth from PyPI on Linux (x86_64 and
+aarch64), macOS (arm64 and x86_64) and Windows x64, loads the plugin into it
+and runs the `vapoursynth` test: every platform's output must match
+`tests/vsplugin/expected.txt`. Elsewhere that test is skipped when the
+`vapoursynth` Python module is not installed.
 
 Two notes:
 
@@ -211,6 +235,37 @@ AviSynth is not a link-time dependency. The plugin resolves the C API from
 the AviSynth module that loaded it, so the same file still loads as a CSRI
 plugin on a machine with no AviSynth. Build with `-Davisynth=false` to leave
 the entry points out.
+
+## VapourSynth
+
+The same library is a VapourSynth plugin, written against API 4 (VapourSynth
+R55 and later), with upstream's identifier, namespace and arguments:
+
+```python
+clip = core.vsfm.TextSubMod(clip, "subs.ass", charset=1, fps=23.976, vfr="timecodes.txt")
+```
+
+`file` and `vfr` are UTF-8 paths (on Windows, an ANSI path is still accepted,
+as upstream accepted it). `fps` defaults to the clip's; a variable-frame-rate
+clip needs `fps` or `vfr`.
+
+| Clip | Rendering |
+| --- | --- |
+| YUV420P8 | Upstream's: the YV12 subpicture conversion and blend. |
+| RGB24 | Upstream's: the packed RGB32 blend it ran on a copy of the frame. |
+| YUV 4:2:0 and 4:2:2, 9–16 bit | The same arithmetic on whole samples. |
+| YUV422P8, Gray, RGB above 8 bit | The same arithmetic at the clip's depth. |
+
+Upstream supported YUV420P10 and P16 by splitting each sample into two 8-bit
+halves and drawing on the high half — or, with `accurate=1`, on both, which
+gives wrong colours. Here `accurate` is accepted and ignored. On a background
+that is exact at 8 bits, high-bit-depth luma shifted down to 8 bits equals
+the 8-bit output exactly; `tests/vsplugin/run.py` checks that, with the
+output's digests, in the `vapoursynth` test. YUV 4:4:4 is rejected, because
+the subtitle's chroma is computed per pixel pair; convert to RGB for it.
+Float clips are rejected too.
+
+Build with `-Dvapoursynth=false` to leave the entry point out.
 
 ## Comparing against upstream
 

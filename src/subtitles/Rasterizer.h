@@ -130,40 +130,24 @@ private:
     void _EvaluateLine(int x0, int y0, int x1, int y1);
     static void _OverlapRegion(tSpanBuffer& dst, tSpanBuffer& src, int dx, int dy);
     // helpers
-    void Draw_noAlpha_spFF_Body_0(RasterizerNfo& rnfo);
-    void Draw_noAlpha_spFF_noBody_0(RasterizerNfo& rnfo);
-    void Draw_noAlpha_sp_Body_0(RasterizerNfo& rnfo);
-    void Draw_noAlpha_sp_noBody_0(RasterizerNfo& rnfo);
-    void Draw_noAlpha_spFF_Body_sse2(RasterizerNfo& rnfo);
-    void Draw_noAlpha_spFF_noBody_sse2(RasterizerNfo& rnfo);
-    void Draw_noAlpha_sp_Body_sse2(RasterizerNfo& rnfo);
-    void Draw_noAlpha_sp_noBody_sse2(RasterizerNfo& rnfo);
-    void Draw_Alpha_spFF_Body_0(RasterizerNfo& rnfo);
-    void Draw_Alpha_spFF_noBody_0(RasterizerNfo& rnfo);
-    void Draw_Alpha_sp_Body_0(RasterizerNfo& rnfo);
-    void Draw_Alpha_sp_noBody_0(RasterizerNfo& rnfo);
-    void Draw_Alpha_spFF_Body_sse2(RasterizerNfo& rnfo);
-    void Draw_Alpha_spFF_noBody_sse2(RasterizerNfo& rnfo);
-    void Draw_Alpha_sp_Body_sse2(RasterizerNfo& rnfo);
-    void Draw_Alpha_sp_noBody_sse2(RasterizerNfo& rnfo);
+    void Draw_noAlpha_spFF_Body(RasterizerNfo& rnfo);
+    void Draw_noAlpha_spFF_noBody(RasterizerNfo& rnfo);
+    void Draw_noAlpha_sp_Body(RasterizerNfo& rnfo);
+    void Draw_noAlpha_sp_noBody(RasterizerNfo& rnfo);
+    void Draw_Alpha_spFF_Body(RasterizerNfo& rnfo);
+    void Draw_Alpha_spFF_noBody(RasterizerNfo& rnfo);
+    void Draw_Alpha_sp_Body(RasterizerNfo& rnfo);
+    void Draw_Alpha_sp_noBody(RasterizerNfo& rnfo);
 
 #ifdef _VSMOD // patch m004. gradient colors
-    void Draw_Grad_noAlpha_spFF_Body_0(RasterizerNfo& rnfo);
-    void Draw_Grad_noAlpha_spFF_noBody_0(RasterizerNfo& rnfo);
-    void Draw_Grad_noAlpha_sp_Body_0(RasterizerNfo& rnfo);
-    void Draw_Grad_noAlpha_sp_noBody_0(RasterizerNfo& rnfo);
-    void Draw_Grad_Alpha_spFF_Body_0(RasterizerNfo& rnfo);
-    void Draw_Grad_Alpha_spFF_noBody_0(RasterizerNfo& rnfo);
-    void Draw_Grad_Alpha_sp_Body_0(RasterizerNfo& rnfo);
-    void Draw_Grad_Alpha_sp_noBody_0(RasterizerNfo& rnfo);
-    void Draw_Grad_noAlpha_spFF_Body_sse2(RasterizerNfo& rnfo);
-    void Draw_Grad_noAlpha_spFF_noBody_sse2(RasterizerNfo& rnfo);
-    void Draw_Grad_noAlpha_sp_Body_sse2(RasterizerNfo& rnfo);
-    void Draw_Grad_noAlpha_sp_noBody_sse2(RasterizerNfo& rnfo);
-    void Draw_Grad_Alpha_spFF_Body_sse2(RasterizerNfo& rnfo);
-    void Draw_Grad_Alpha_spFF_noBody_sse2(RasterizerNfo& rnfo);
-    void Draw_Grad_Alpha_sp_Body_sse2(RasterizerNfo& rnfo);
-    void Draw_Grad_Alpha_sp_noBody_sse2(RasterizerNfo& rnfo);
+    void Draw_Grad_noAlpha_spFF_Body(RasterizerNfo& rnfo);
+    void Draw_Grad_noAlpha_spFF_noBody(RasterizerNfo& rnfo);
+    void Draw_Grad_noAlpha_sp_Body(RasterizerNfo& rnfo);
+    void Draw_Grad_noAlpha_sp_noBody(RasterizerNfo& rnfo);
+    void Draw_Grad_Alpha_spFF_Body(RasterizerNfo& rnfo);
+    void Draw_Grad_Alpha_spFF_noBody(RasterizerNfo& rnfo);
+    void Draw_Grad_Alpha_sp_Body(RasterizerNfo& rnfo);
+    void Draw_Grad_Alpha_sp_noBody(RasterizerNfo& rnfo);
 #endif
 public:
     Rasterizer();

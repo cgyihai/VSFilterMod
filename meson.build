@@ -1,5 +1,5 @@
 project('vsfiltermod', 'c', 'cpp',
-    version : '1.1.90',
+    version : '1.3.0',
     license : 'GPL-2.0-or-later',
     meson_version : '>=0.59.0',
     default_options : [
@@ -44,8 +44,32 @@ else
         language : ['c', 'cpp'])
 endif
 
-# SSE2 is a baseline assumption of the blend kernels. It is implied by x86-64
-# and by AArch64-through-sse2neon; only 32-bit x86 has to ask for it.
+# Output must not depend on the target CPU. GCC and Clang fuse a * b + c into
+# a single FMA wherever the target has one -- every AArch64 core, so Apple
+# Silicon and ARM Linux -- and an FMA rounds once where x86-64 rounds twice.
+# That moves glyph points by a fraction of a pixel and changes the edges of
+# animated (\move, \t, \org) lines. MSVC does not contract under its default
+# /fp:precise; never build with /fp:fast or -ffast-math.
+if cxx.get_id() != 'msvc'
+    add_project_arguments(
+        cxx.get_supported_arguments('-ffp-contract=off'),
+        language : ['c', 'cpp'])
+endif
+
+# Integer arithmetic on values from a script (\fs99999999, PlayResX: -2147483648,
+# timestamps of a million hours) can overflow. Upstream's x86 build simply
+# wrapped; -fwrapv makes that the defined behaviour for GCC and Clang, so their
+# optimizers cannot turn such input into different results on different
+# compilers. (MSVC wraps without being asked.)
+if cxx.get_id() != 'msvc'
+    add_project_arguments(
+        cxx.get_supported_arguments('-fwrapv'),
+        language : ['c', 'cpp'])
+endif
+
+# 32-bit x86 must do float arithmetic in SSE registers, not on the x87 stack
+# with its 80-bit intermediates, or glyph positions would differ from every
+# other build. x86-64 always uses SSE.
 if host_cpu == 'x86'
     if cxx.get_id() == 'msvc'
         add_project_arguments('/arch:SSE2', language : ['c', 'cpp'])
@@ -115,20 +139,6 @@ if host_system != 'windows'
     endif
 endif
 
-# On AArch64 (Apple Silicon, ARM Linux) the SSE2 blend kernels go through
-# sse2neon, a header-only shim, so Rasterizer stays single-sourced. It is
-# optional: without it the scalar kernels are used instead, which is correct
-# but slower. Point at it with -Dcpp_args=-I/path/to/sse2neon, or drop the
-# header somewhere on the include path.
-sse2neon_inc = []
-if host_cpu == 'aarch64'
-    if cxx.has_header('sse2neon.h')
-        message('sse2neon found: using the SSE2 blend kernels on NEON')
-    else
-        warning('sse2neon.h not found; falling back to the scalar blend kernels')
-    endif
-endif
-
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
@@ -137,6 +147,9 @@ vsfm_src = files(
     'src/compat/cstring_compat.cpp',
     'src/compat/text_compat.cpp',
     'src/compat/cpu_compat.cpp',
+    'src/compat/det_float.cpp',
+    'src/compat/num_compat.cpp',
+    'src/compat/det_math.cpp',
 
     'src/font/font_engine.cpp',
 
@@ -146,7 +159,39 @@ vsfm_src = files(
     'src/subtitles/TextFile.cpp',
 ) + font_src
 
-inc = include_directories('src', 'src/vsfilter', 'include')
+# The version lives in the project() call above and nowhere else: it is
+# configured into vsfm_version.h (and, on Windows, the file properties).
+version_parts = meson.project_version().split('.')
+version_conf = configuration_data()
+version_conf.set('VERSION', meson.project_version())
+version_conf.set('MAJOR', version_parts[0])
+version_conf.set('MINOR', version_parts[1])
+version_conf.set('PATCH', version_parts[2])
+configure_file(input : 'src/vsfm_version.h.in', output : 'vsfm_version.h',
+               configuration : version_conf)
+
+# Windows version resources for the plugin and vsfmrender.
+version_rc = {}
+if host_system == 'windows'
+    winmod = import('windows')
+    foreach target, info : {
+        'plugin' : ['VSFilterMod subtitle renderer (CSRI, AviSynth+ and VapourSynth plugin)', 'vsfiltermod', 'vsfiltermod.dll', 'VFT_DLL'],
+        'renderer' : ['VSFilterMod BDN+XML renderer', 'vsfmrender', 'vsfmrender.exe', 'VFT_APP'],
+    }
+        rc_conf = configuration_data()
+        rc_conf.merge_from(version_conf)
+        rc_conf.set('DESCRIPTION', info[0])
+        rc_conf.set('NAME', info[1])
+        rc_conf.set('FILENAME', info[2])
+        rc_conf.set('FILETYPE', info[3])
+        rc = configure_file(input : 'src/vsfm_version.rc.in',
+                            output : info[1] + '_version.rc',
+                            configuration : rc_conf)
+        version_rc += {target : winmod.compile_resources(rc)}
+    endforeach
+endif
+
+inc = include_directories('.', 'src', 'src/vsfilter', 'include')
 
 # ---------------------------------------------------------------------------
 # The CSRI plugin
@@ -157,29 +202,47 @@ inc = include_directories('src', 'src/vsfilter', 'include')
 # whatever files it finds.
 # ---------------------------------------------------------------------------
 
-# The AviSynth+ entry points (TextSubMod / MaskSubMod) live in the same
-# library, as they did upstream, so one file serves both Aegisub (CSRI) and
-# AviSynth scripts such as avs2bdnxml's. AviSynth is not linked: its C API is
-# resolved at plugin init from the module that loaded us.
+# The AviSynth+ entry points (TextSubMod / MaskSubMod) and the VapourSynth one
+# (vsfm.TextSubMod) live in the same library, as upstream's did, so one file
+# serves Aegisub (CSRI), AviSynth scripts such as avs2bdnxml's, and
+# VapourSynth scripts. Neither frame server is linked: AviSynth's C API is
+# resolved at plugin init from the module that loaded us, and VapourSynth
+# hands its API to the entry point.
 plugin_src = files('src/vsfilter/csriapi.cpp')
 plugin_deps = []
-if get_option('avisynth')
+if get_option('avisynth') or get_option('vapoursynth')
     plugin_src += files(
-        'src/vsfilter/avisynth_plugin.cpp',
+        'src/vsfilter/sub_source.cpp',
         'src/vsfilter/vfr.cpp',
         'src/subpic/mem_subpic.cpp',
     )
+endif
+if get_option('avisynth')
+    plugin_src += files('src/vsfilter/avisynth_plugin.cpp')
     if host_system != 'windows'
         plugin_deps += cxx.find_library('dl', required : false)
     endif
 endif
+if get_option('vapoursynth')
+    plugin_src += files('src/vsfilter/vapoursynth_plugin.cpp')
+endif
+
+# On ELF platforms, symbols of static libraries linked into the plugin (the
+# FreeType and libpng subprojects, when used) stay private to it. The host
+# application and fontconfig load the system FreeType; without this, calls in
+# one copy could bind to the other.
+plugin_link_args = []
+if host_system != 'windows' and host_system != 'darwin'
+    plugin_link_args += cxx.get_supported_link_arguments('-Wl,--exclude-libs,ALL')
+endif
 
 csri_lib = shared_library('vsfiltermod',
-    vsfm_src + plugin_src,
-    include_directories : [inc] + sse2neon_inc,
+    vsfm_src + plugin_src + version_rc.get('plugin', []),
+    include_directories : inc,
     dependencies : deps + plugin_deps,
     name_prefix : '',
     gnu_symbol_visibility : 'hidden',
+    link_args : plugin_link_args,
     install : true,
     install_dir : get_option('libdir') / 'csri')
 
@@ -205,6 +268,75 @@ if get_option('tests')
          args : [csri_lib.full_path()],
          depends : [csri_lib])
 
+    det_float_test = executable('det_float_test',
+        files('tests/det_float_test.cpp', 'src/compat/det_float.cpp',
+              'src/compat/det_math.cpp'),
+        include_directories : inc,
+        build_by_default : false)
+
+    test('det-float', det_float_test)
+
+    num_compat_test = executable('num_compat_test',
+        files('tests/num_compat_test.cpp', 'src/compat/num_compat.cpp'),
+        include_directories : inc,
+        build_by_default : false)
+
+    test('num-compat', num_compat_test)
+
+    # Not a test: run it explicitly, ideally in a -Db_sanitize=address,undefined
+    # build (the CI sanitizer job does). See tests/fuzz_render.cpp.
+    executable('fuzz_render',
+        vsfm_src + files('src/vsfilter/csriapi.cpp', 'tests/fuzz_render.cpp'),
+        include_directories : inc,
+        dependencies : deps,
+        gnu_symbol_visibility : 'default',
+        build_by_default : false)
+
+    # Renders tests/consistency/*.ass with the bundled font embedded, and
+    # requires every event's pixels to match tests/consistency/expected.txt.
+    # The same file is checked on every platform in CI, so a pass everywhere
+    # means Windows, Linux and macOS render identically.
+    if get_option('bdnxml')
+        py = find_program('python3', 'python', required : false)
+        if py.found()
+            test('render-consistency', py,
+                 args : [files('tests/consistency/run.py'),
+                         '--renderer', vsfmrender.full_path(),
+                         '--out', meson.current_build_dir() / 'consistency'],
+                 depends : [vsfmrender],
+                 timeout : 300)
+        endif
+    endif
+
+    # Scripts that once crashed, hung or exhausted memory (tests/regressions):
+    # each must render to BDN+XML, with at least one event, within the time
+    # limit. They are fuzzer seeds too.
+    if get_option('bdnxml')
+        foreach name : ['clip-bottom-edge', 'empty-header-values', 'huge-stretch']
+            test('regression-' + name, vsfmrender,
+                 args : ['--quiet', '--size', '640x360', '--fps', '25',
+                         files('tests/regressions' / name + '.ass'),
+                         meson.current_build_dir() / 'regression-' + name + '.xml'],
+                 timeout : 60)
+        endforeach
+    endif
+
+    # Loads the plugin into VapourSynth and renders the consistency fixtures
+    # onto clips of every supported format: checks the output against
+    # tests/vsplugin/expected.txt and the formats against one another.
+    # Skipped where the vapoursynth Python module is not installed.
+    if get_option('vapoursynth')
+        py_vs = find_program('python3', 'python', required : false)
+        if py_vs.found()
+            test('vapoursynth', py_vs,
+                 args : [files('tests/vsplugin/run.py'),
+                         '--plugin', csri_lib.full_path(),
+                         '--out', meson.current_build_dir() / 'vsplugin'],
+                 depends : [csri_lib],
+                 timeout : 300)
+        endif
+    endif
+
     # Type-checks the POSIX branch of the compatibility layer while building
     # on Windows, by undefining _WIN32 after the system headers are in. It
     # cannot stand in for a real Linux or macOS build -- iconv, fontconfig,
@@ -229,5 +361,6 @@ summary({
     'target'         : host_system + '/' + host_cpu,
     'BDN+XML writer' : get_option('bdnxml'),
     'AviSynth+ entry': get_option('avisynth'),
+    'VapourSynth entry': get_option('vapoursynth'),
     'tests'          : get_option('tests'),
 }, section : 'VSFilterMod')

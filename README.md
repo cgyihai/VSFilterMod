@@ -7,9 +7,10 @@
 **English** | [简体中文](README.zh-CN.md)
 
 A port of the VSFilterMod subtitle renderer to **Windows, Linux and macOS**.
-It ships as one library that is both a **CSRI** plugin for Aegisub and an
-**AviSynth+** plugin (`TextSubMod` / `MaskSubMod`), plus `vsfmrender`, a
-command line tool that renders subtitles to **BDN+XML** for Blu-ray authoring.
+It ships as one library that is a **CSRI** plugin for Aegisub, an
+**AviSynth+** plugin (`TextSubMod` / `MaskSubMod`) and a **VapourSynth**
+plugin (`vsfm.TextSubMod`), plus `vsfmrender`, a command line tool that
+renders subtitles to **BDN+XML** for Blu-ray authoring.
 
 The ASS parser and the rasterizer are VSFilterMod's own, so the whole mod tag
 set renders as it always did: `\pngimg` picture backgrounds, gradients,
@@ -38,6 +39,9 @@ Z-coordinates and vertical spacing.
 - **Aegisub plugin** (CSRI) for live preview.
 - **AviSynth+ plugin** with upstream's `TextSubMod` / `MaskSubMod`
   signatures, so existing scripts and avs2bdnxml keep working.
+- **VapourSynth plugin** (API 4) with upstream's `vsfm.TextSubMod`
+  signature: 8-bit output as upstream's, 9–16-bit YUV and RGB blended at
+  full precision, also 4:2:2 and Gray.
 - **BDN+XML output** through `vsfmrender`, byte-identical to what avs2bdnxml
   produces from this plugin's `MaskSubMod`.
 - **Embedded fonts** (`[Fonts]` attachments) work, through CSRI too.
@@ -53,14 +57,22 @@ of any commit are under the run's *Artifacts* on the
 
 | Platform | Archive | Contents |
 | --- | --- | --- |
-| Windows x86_64 | `vsfiltermod-windows-x86_64-msvc` | `vsfiltermod.dll`, `vsfmrender.exe` — self-contained, no extra DLLs |
+| Windows x86_64 | `vsfiltermod-windows-x86_64-msvc` | `vsfiltermod.dll`, `vsfmrender.exe` |
+| Windows x86 (32-bit) | `vsfiltermod-windows-x86-msvc` | `vsfiltermod.dll`, `vsfmrender.exe` — for 32-bit Aegisub, AviSynth+ and avs2bdnxml |
+| Windows ARM64 | `vsfiltermod-windows-arm64-msvc` | `vsfiltermod.dll`, `vsfmrender.exe` |
 | Linux x86_64 | `vsfiltermod-linux-x86_64` | `vsfiltermod.so`, `vsfmrender` |
 | Linux aarch64 | `vsfiltermod-linux-aarch64` | `vsfiltermod.so`, `vsfmrender` |
+| macOS universal | `vsfiltermod-macos-universal` | `vsfiltermod.dylib`, `vsfmrender` — Apple Silicon and Intel in one |
 | macOS Apple Silicon | `vsfiltermod-macos-arm64` | `vsfiltermod.dylib`, `vsfmrender` |
 | macOS Intel | `vsfiltermod-macos-x86_64` | `vsfiltermod.dylib`, `vsfmrender` |
 
-The Linux and macOS builds link against the system's FreeType, libpng and
-fontconfig (Linux) — install those from your package manager or Homebrew.
+Every build has FreeType and libpng linked in, all at the same pinned version,
+so they render identically. The Windows builds need no extra DLLs. The macOS
+builds need nothing outside macOS and run on macOS 11 or later (Apple
+Silicon) and 10.15 or later (Intel). The Linux builds need only fontconfig and
+zlib, which every desktop distribution has, and run on glibc 2.35 or later
+(Ubuntu 22.04, Debian 12, Fedora 36 and newer). Each release has a
+`SHA256SUMS` file.
 
 ## Usage
 
@@ -93,8 +105,28 @@ MaskSubMod("subtitle.ass", 1920, 1080, 23.976, 3000)   # RGBA, for avs2bdnxml
 # TextSubMod("subtitle.ass")
 ```
 
-Any 64-bit avs2bdnxml that loads scripts through AviSynth+ can use it.
-32-bit hosts cannot load a 64-bit plugin.
+Any avs2bdnxml that loads scripts through AviSynth+ can use it: take the
+32-bit (`windows-x86`) build for a 32-bit avs2bdnxml or AviSynth+, the
+64-bit one otherwise.
+
+### VapourSynth
+
+The same library is a VapourSynth plugin (API 4, VapourSynth R55 or later),
+with the namespace and arguments of upstream's:
+
+```python
+import vapoursynth as vs
+core = vs.core
+core.std.LoadPlugin("vsfiltermod.dll")      # unless it is in the plugin folder
+clip = core.vsfm.TextSubMod(clip, "subtitle.ass")
+# TextSubMod(clip, file, charset=1, fps=..., vfr="timecodes.txt")
+```
+
+Clips may be YUV 4:2:0 or 4:2:2, Gray or RGB, 8 to 16 bits per sample.
+YUV420P8 and RGB24 come out exactly as from upstream's filter. Upstream drew
+10- and 16-bit clips as two 8-bit halves; here every depth is blended at its
+own precision, so `accurate=` is accepted but no longer needed. For 4:4:4,
+convert to RGB.
 
 ### vsfmrender
 
@@ -112,7 +144,25 @@ vsfmrender --size 1920x1080 --fps 23.976 input.ass output.xml
 | `-t, --title TEXT` | Title recorded in the index |
 | `--first N` / `--last N` | Frame range to export |
 | `--no-crop` | Full-frame images (avs2bdnxml `-a0`) |
+| `--fontdir DIR` | Use the fonts in `DIR` (recursively) ahead of installed ones; repeatable |
+| `--font-report` | List what every font the script uses resolved to |
+| `--strict-fonts` | Exit with status 3 if any font had to be substituted |
 | `-q, --quiet` | No progress output |
+
+### Same fonts on every machine
+
+A script that names a font the machine does not have gets whatever the
+platform substitutes — a different font on Windows, macOS and Linux. Three
+ways to rule that out:
+
+- **Embed the fonts** in the script (`[Fonts]`, e.g. Aegisub's *Attachments*).
+- **Share a font folder.** Fonts in it are found exactly like embedded ones,
+  ahead of installed fonts. `vsfmrender --fontdir DIR`; for Aegisub and
+  AviSynth set the `VSFM_FONT_DIRS` environment variable (several folders
+  separated by `;` on Windows, `:` elsewhere).
+- **Check.** `vsfmrender` names every substituted font after rendering, and
+  `--strict-fonts` makes that an error. For Aegisub and AviSynth, set
+  `VSFM_FONT_LOG=1` to print each font as it is resolved.
 
 ## Building
 
@@ -143,8 +193,14 @@ Measured on Windows against upstream VSFilterMod's CSRI plugin: the overlap
 Event timing follows `MaskSubMod`'s clock exactly, single-precision rounding
 included, so BDN+XML events start and end on the same frames as upstream's.
 The remaining differences are antialiasing at glyph edges, a fraction of a
-pixel. Linux and macOS run the same code; there, differences come from which
-font files are installed.
+pixel.
+
+**Across platforms the output is identical, not merely close.** Given the
+same font files, every build — Windows, Linux and macOS, x86-64 and ARM —
+produces the same pixels: there is no SIMD-, CPU- or compiler-dependent code
+path, and CI renders `tests/consistency/` on every platform and fails if any
+pixel differs from the shared `expected.txt`. What can still differ between
+machines is which fonts are installed (see *Known issues*).
 
 ## How this differs from upstream
 
@@ -166,12 +222,24 @@ Sizing, baseline and the kerning GDI applies to such runs follow GDI.
 heavier strokes it uses for rotated text.
 
 **Embedded fonts work** through CSRI and on every platform: attachments go to
-FreeType instead of being installed into the OS.
+FreeType instead of being installed into the OS. They are found by every name
+GDI would find them by — the Windows family name ("Source Han Sans SC
+Medium"), the typographic family, the full name, and the localized names of
+any language, including GBK/Big5/Shift-JIS-encoded names in older CJK fonts —
+and when several attached faces share a family, the one matching the
+requested weight and slant is used, as GDI picks it. Named instances of an
+attached variable font are listed the way GDI lists them ("Family Black").
+A character none of the usual fallback fonts has is looked up in the attached
+fonts (and a `--fontdir` folder) before the platform's own fallback, so it
+comes out the same on every machine.
 
 **DirectShow is gone.** The DirectShow filter, its property pages, the
 VobSub/DVB/HDMV/CC/USF/SSF/RealText parsers and the DirectX subpicture
 backends were removed; none is reachable from Aegisub, AviSynth or BDN+XML
-output. `VobSub()` and the VapourSynth plugin are not carried over.
+output. `VobSub()` is not carried over, in AviSynth or VapourSynth.
+
+**The VapourSynth plugin targets API 4** (upstream's used the retired API 3)
+and blends high bit depths properly instead of splitting samples in two.
 
 **Rendering does not depend on the machine.** DPI is pinned at 96 and
 charset-to-code-page mapping uses a fixed table. The one exception is glyph
@@ -191,13 +259,16 @@ does.
 - A face name GDI does not know, such as `@Arial`, makes GDI substitute
   SimSun for the whole line, Latin included; here the Latin stays in the
   style face.
-- The Linux and macOS builds are compiled and smoke-tested by CI but have
-  not been compared against upstream pixel by pixel.
+- The Linux and macOS builds render bit-for-bit like the Windows build (CI
+  checks this), but when a script names a font the machine does not have,
+  each platform substitutes its own. Embed the fonts in the script
+  (`[Fonts]`) to rule that out.
 
 ## Credits and licence
 
 Based on **VSFilter** by Gabest (Guliverkli) and **VSFilterMod**. The
-AviSynth+ C API headers in `include/avisynth` come from the AviSynth+ project.
+AviSynth+ C API headers in `include/avisynth` come from the AviSynth+ project;
+`include/vapoursynth/VapourSynth4.h` comes from VapourSynth (LGPL 2.1).
 
 Licensed under the [GNU General Public License v2.0 or later](LICENSE), as
 upstream.

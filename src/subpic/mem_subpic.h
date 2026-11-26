@@ -51,6 +51,30 @@ public:
     /* Composites the dirty area onto `target` at the same position. */
     bool AlphaBlt(SubPicDesc& target) const;
 
+    /* Composites the dirty area onto separate planes of 8 to 16 bits per
+     * sample, top-down -- VapourSynth's layout. For PLANES_YUV and
+     * PLANES_GRAY the subpicture must be of a YUV type (it holds converted
+     * samples): YV12 or IYUV for 4:2:0, any of them -- YUY2 keeps odd heights
+     * whole -- for 4:2:2 and gray. For PLANES_RGB it must be MSP_RGB32
+     * (premultiplied B, G, R). As with every YUV type, the conversion works on
+     * horizontal pairs, so the last column of an odd-width gray clip is
+     * never drawn on.
+     *
+     * The arithmetic is AlphaBlt's, carried out at the target's precision:
+     * the subtitle's 8-bit values are scaled to the target's bit depth, the
+     * video is not reduced to 8 bits, and results are clamped. For 8-bit RGB
+     * it is exactly AlphaBlt's MSP_RGB32 formula. */
+    enum { PLANES_YUV, PLANES_GRAY, PLANES_RGB };
+    struct Planes
+    {
+        int family = PLANES_YUV;
+        int bits = 8;               // 8..16; samples are 16-bit above 8
+        int subW = 1, subH = 1;     // chroma subsampling, log2: (1,1) 4:2:0, (1,0) 4:2:2
+        unsigned char* data[3] = {};
+        ptrdiff_t stride[3] = {};   // bytes
+    };
+    bool AlphaBltPlanes(const Planes& target) const;
+
     const RECT& Dirty() const { return m_rcDirty; }
 
 private:

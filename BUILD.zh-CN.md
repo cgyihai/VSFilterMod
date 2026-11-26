@@ -6,7 +6,7 @@
 
 | 产物 | 说明 |
 | --- | --- |
-| `vsfiltermod.dll` / `.so` / `.dylib` | **CSRI** 字幕渲染插件，Aegisub 在所有平台上都以这种形式加载；同时也是 **AviSynth+** 插件（`TextSubMod` / `MaskSubMod`）。 |
+| `vsfiltermod.dll` / `.so` / `.dylib` | **CSRI** 字幕渲染插件，Aegisub 在所有平台上都以这种形式加载；同时也是 **AviSynth+** 插件（`TextSubMod` / `MaskSubMod`）和 **VapourSynth** 插件（`vsfm.TextSubMod`）。 |
 | `vsfmrender` | 命令行工具，把字幕渲染成 **BDN+XML**（一个索引文件，加上每个事件一张 PNG）。 |
 
 两者使用同一套渲染器源码，所以导出到 BDN+XML 的字幕与 Aegisub 预览的画面逐像素相同。
@@ -35,17 +35,21 @@ meson setup build -Dbdnxml=false              # 只编译插件
 meson setup build -Dtests=false
 ```
 
-### Apple Silicon 与 ARM Linux
+### 所有平台输出一致
 
-光栅化器的混合内核是按 SSE2 写的。在 AArch64 上可以通过单头文件
-[sse2neon](https://github.com/DLTcollab/sse2neon) 运行：
+渲染代码是纯粹的可移植 C++：没有任何代码路径依赖 SIMD 支持、CPU 厂商或编译器。
+构建时会传入 `-ffp-contract=off`，禁止 GCC 和 Clang 把 `a * b + c` 合并成 FMA 指令
+（所有 AArch64 CPU 都有 FMA，而它的舍入方式不同）。不要使用 `-ffast-math`、`/fp:fast`
+或 `-ffp-contract=fast` 编译，否则 `render-consistency` 测试会失败。
+
+`meson test` 包含这项测试：它把内置的 Caladea 字体嵌入 `tests/consistency/*.ass`
+后渲染（因此不涉及任何已安装字体），要求每个事件的像素都与
+`tests/consistency/expected.txt` 完全一致——所有平台用的是同一个文件。
+如果是有意修改了渲染结果，请重新生成该文件并与改动一起提交：
 
 ```bash
-curl -LO https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h
-meson setup build -Dcpp_args=-I$PWD
+python3 tests/consistency/run.py --renderer build/src/bdnxml/vsfmrender --out build/consistency --update
 ```
-
-没有它也能编译，渲染结果完全相同，只是改用较慢的标量内核。Meson 会打印实际选用的是哪一种。
 
 ## 安装到 Aegisub
 
@@ -96,20 +100,36 @@ macOS 上可以从终端启动 Aegisub，查看加载器的警告信息。
 
 ## 持续集成
 
-`.github/workflows/ci.yml` 编译并测试六种配置：
+`.github/workflows/ci.yml` 编译并测试八种配置：
 
-| 任务 | 工具链 | 字体后端 | 依赖来源 |
+| 任务 | 运行环境 | 工具链 | 字体后端 |
 | --- | --- | --- | --- |
-| Linux x86_64 | GCC | fontconfig | apt |
-| Linux aarch64 | GCC | fontconfig | apt + sse2neon |
-| macOS arm64（`macos-15`） | Clang | CoreText | Homebrew + sse2neon |
-| macOS x86_64（`macos-15-intel`） | Clang | CoreText | Homebrew |
-| Windows x86_64（MSVC） | MSVC | DirectWrite | Meson 子项目，全部静态链接 |
-| Windows x86_64（MinGW） | GCC | DirectWrite | MSYS2 |
+| Linux x86_64 | `ubuntu-22.04` | GCC | fontconfig |
+| Linux aarch64 | `ubuntu-22.04-arm` | GCC | fontconfig |
+| macOS arm64 | `macos-15` | Clang | CoreText |
+| macOS x86_64 | `macos-15-intel` | Clang | CoreText |
+| Windows x86_64 | `windows-latest` | MSVC | DirectWrite |
+| Windows x86 | `windows-latest` | MSVC（x64 → x86） | DirectWrite |
+| Windows ARM64 | `windows-11-arm` | MSVC | DirectWrite |
+| Windows x86_64（MinGW） | `windows-latest` | GCC，MSYS2 软件包 | DirectWrite |
 
-每个任务都会运行 `csri-abi` 测试（按 Aegisub 加载器的方式加载插件并渲染），然后把
-`tests/smoke.ass` 渲染成 BDN+XML，并用 `tests/check_bdnxml.py` 校验结果。校验器会拒绝
-完全透明的图片，所以某个平台的字体查找如果悄悄失败，编译就会报错，而不是输出空白字幕。
+除 MinGW 外，都从固定版本的子项目编译 FreeType 和 libpng 并静态链接（Linux 上用
+`--exclude-libs` 私有链接），所以每个发布的二进制文件都使用同一个 FreeType。
+`macos-universal` 任务用 `lipo` 合并两个 macOS 版本；`sanitizers` 任务在
+AddressSanitizer 和 UndefinedBehaviorSanitizer 下运行测试和模糊测试。
+
+每个任务都会运行 `csri-abi` 测试（按 Aegisub 加载器的方式加载插件并渲染）和
+`render-consistency` 测试（要求本平台对 `tests/consistency/*.ass` 的渲染与 `expected.txt`
+逐像素一致），然后把 `tests/smoke.ass` 渲染成 BDN+XML，并用 `tests/check_bdnxml.py`
+校验结果。校验器会拒绝完全透明的图片，所以某个平台的字体查找如果悄悄失败，编译就会报错，
+而不是输出空白字幕。
+
+最后的 `consistency` 任务会汇总所有平台的结果，列出哪些平台一致、在哪些事件上不一致。
+
+`vapoursynth` 任务在 Linux（x86_64 与 aarch64）、macOS（arm64 与 x86_64）和
+Windows x64 上从 PyPI 安装 VapourSynth，把插件载入其中并运行 `vapoursynth` 测试：
+每个平台的输出都必须与 `tests/vsplugin/expected.txt` 一致。其他环境中如果没有安装
+`vapoursynth` Python 模块，该测试会被跳过。
 
 两点说明：
 
@@ -187,6 +207,33 @@ VFR 选帧相同。
 AviSynth 不是链接时依赖。插件在加载时从加载它的 AviSynth 模块解析 C API，所以在没有安装
 AviSynth 的机器上，同一个文件仍能作为 CSRI 插件加载。用 `-Davisynth=false` 编译可以去掉
 这些入口函数。
+
+## VapourSynth
+
+同一个库也是 VapourSynth 插件，基于 API 4（VapourSynth R55 及更新版本），标识符、
+命名空间和参数都与原版相同：
+
+```python
+clip = core.vsfm.TextSubMod(clip, "subs.ass", charset=1, fps=23.976, vfr="timecodes.txt")
+```
+
+`file` 和 `vfr` 是 UTF-8 路径（在 Windows 上仍和原版一样接受 ANSI 路径）。`fps`
+默认取片段的帧率；可变帧率片段必须指定 `fps` 或 `vfr`。
+
+| 片段 | 渲染方式 |
+| --- | --- |
+| YUV420P8 | 与原版相同：YV12 字幕图层转换与混合。 |
+| RGB24 | 与原版相同：原版在帧副本上做的 RGB32 打包混合。 |
+| 4:2:0 和 4:2:2 YUV，9–16 位 | 同样的算法，作用于完整采样。 |
+| YUV422P8、灰度、8 位以上 RGB | 同样的算法，按片段自身位深计算。 |
+
+原版支持 YUV420P10 和 P16 的方式，是把每个采样拆成两个 8 位的一半，只在高位一半上
+绘制；`accurate=1` 时两半都绘制，颜色会出错。这里 `accurate` 仍可传入，但会被忽略。
+在 8 位下精确的背景上，高位深的亮度右移到 8 位后与 8 位输出完全相同；
+`tests/vsplugin/run.py` 在 `vapoursynth` 测试中检查这一点，并比对输出摘要。
+4:4:4 YUV 会被拒绝，因为字幕的色度按像素对计算；请转换为 RGB。浮点片段同样不支持。
+
+用 `-Dvapoursynth=false` 编译可以去掉这个入口函数。
 
 ## 与原版对比
 
