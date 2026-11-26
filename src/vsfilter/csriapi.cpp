@@ -20,6 +20,7 @@
  */
 
 #include "../compat/vsfm_compat.h"
+#include "vsfm_version.h"
 #include "../subtitles/RTS.h"
 
 #include <limits>
@@ -58,7 +59,26 @@ static csri_rend csri_vsfilter = "vsfiltermod";
 static csri_rend csri_vsfilter = "vsfilter";
 #endif
 
-CSRIAPI csri_inst *csri_open_file(csri_rend *renderer, const char *filename, struct csri_openflag *flags)
+/* No C++ exception may cross into the host: Aegisub and the frame servers
+ * call these through a C ABI, and an exception unwinding out of them ends
+ * the process. The parsers report malformed fields by throwing, and an
+ * allocation can fail; either way the call fails as a bad script does --
+ * no instance, or no subtitle drawn. */
+template <typename F>
+static void NoThrow(F f)
+{
+    try { f(); } catch(...) {}
+}
+
+static void DeleteInst(csri_inst *inst)
+{
+    if(!inst) return;
+    delete inst->rts;
+    delete inst->cs;
+    delete inst;
+}
+
+static csri_inst *OpenFile(csri_rend *renderer, const char *filename, struct csri_openflag *flags)
 {
     (void)renderer; (void)flags;
     if(!filename) return 0;
@@ -68,53 +88,68 @@ CSRIAPI csri_inst *csri_open_file(csri_rend *renderer, const char *filename, str
     if(path.IsEmpty()) return 0;
 
     csri_inst *inst = new csri_inst();
-    inst->cs = new CCritSec();
-    inst->rts = new CRenderedTextSubtitle(inst->cs);
-
-    if(inst->rts->Open(CString(path), DEFAULT_CHARSET))
+    inst->rts = 0;
+    inst->cs = 0;
+    bool ok = false;
+    NoThrow([&] {
+        inst->cs = new CCritSec();
+        inst->rts = new CRenderedTextSubtitle(inst->cs);
+        ok = inst->rts->Open(CString(path), DEFAULT_CHARSET);
+    });
+    if(ok)
     {
         inst->readorder = 0;
         return inst;
     }
 
-    delete inst->rts;
-    delete inst->cs;
-    delete inst;
+    DeleteInst(inst);
     return 0;
 }
 
+CSRIAPI csri_inst *csri_open_file(csri_rend *renderer, const char *filename, struct csri_openflag *flags)
+{
+    csri_inst *inst = 0;
+    NoThrow([&] { inst = OpenFile(renderer, filename, flags); });
+    return inst;
+}
 
-CSRIAPI csri_inst *csri_open_mem(csri_rend *renderer, const void *data, size_t length, struct csri_openflag *flags)
+
+static csri_inst *OpenMem(csri_rend *renderer, const void *data, size_t length, struct csri_openflag *flags)
 {
     (void)renderer; (void)flags;
     /* Parses straight out of `data`; CSimpleTextSubtitle::Open no longer
      * spools it to a temp file first. This is the path Aegisub drives on
      * every edit. */
     csri_inst *inst = new csri_inst();
-    inst->cs = new CCritSec();
-    inst->rts = new CRenderedTextSubtitle(inst->cs);
-    if(inst->rts->Open((BYTE*)data, (int)length, DEFAULT_CHARSET, _T("CSRI memory subtitles")))
+    inst->rts = 0;
+    inst->cs = 0;
+    bool ok = false;
+    NoThrow([&] {
+        inst->cs = new CCritSec();
+        inst->rts = new CRenderedTextSubtitle(inst->cs);
+        ok = inst->rts->Open((BYTE*)data, (int)length, DEFAULT_CHARSET, _T("CSRI memory subtitles"));
+    });
+    if(ok)
     {
         inst->readorder = 0;
         return inst;
     }
-    else
-    {
-        delete inst->rts;
-        delete inst->cs;
-        delete inst;
-        return 0;
-    }
+
+    DeleteInst(inst);
+    return 0;
+}
+
+CSRIAPI csri_inst *csri_open_mem(csri_rend *renderer, const void *data, size_t length, struct csri_openflag *flags)
+{
+    csri_inst *inst = 0;
+    NoThrow([&] { inst = OpenMem(renderer, data, length, flags); });
+    return inst;
 }
 
 
 CSRIAPI void csri_close(csri_inst *inst)
 {
-    if(!inst) return;
-
-    delete inst->rts;
-    delete inst->cs;
-    delete inst;
+    NoThrow([&] { DeleteInst(inst); });
 }
 
 
@@ -147,7 +182,7 @@ CSRIAPI int csri_request_fmt(csri_inst *inst, const struct csri_fmt *fmt)
 }
 
 
-CSRIAPI void csri_render(csri_inst *inst, struct csri_frame *frame, double time)
+static void Render(csri_inst *inst, struct csri_frame *frame, double time)
 {
     if(!inst || !frame)
         return;
@@ -214,6 +249,11 @@ CSRIAPI void csri_render(csri_inst *inst, struct csri_frame *frame, double time)
     inst->rts->Render(spd, (REFERENCE_TIME)(time * 10000000), arbitrary_framerate, rendered_bbox);
 }
 
+CSRIAPI void csri_render(csri_inst *inst, struct csri_frame *frame, double time)
+{
+    NoThrow([&] { Render(inst, frame, time); });
+}
+
 
 // Stream extension implementation
 static csri_inst *vsfilter_init_stream(csri_rend *renderer, const void *header, size_t headerlen, struct csri_openflag *flags)
@@ -221,7 +261,7 @@ static csri_inst *vsfilter_init_stream(csri_rend *renderer, const void *header, 
     return csri_open_mem(renderer, header, headerlen, flags);
 }
 
-static void vsfilter_push_packet(csri_inst *inst, const void *packet, size_t packetlen, double pts_start, double pts_end)
+static void PushPacket(csri_inst *inst, const void *packet, size_t packetlen, double pts_start, double pts_end)
 {
     if (!inst || !inst->rts || !packet || packetlen == 0) return;
 
@@ -237,14 +277,14 @@ static void vsfilter_push_packet(csri_inst *inst, const void *packet, size_t pac
     Explode(str, sl, ',', fields);
     if(sl.GetCount() == fields)
     {
-        stse.readorder = wcstol(sl.RemoveHead(), NULL, 10);
-        stse.layer = wcstol(sl.RemoveHead(), NULL, 10);
+        stse.readorder = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
+        stse.layer = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
         stse.style = sl.RemoveHead();
         stse.actor = sl.RemoveHead();
-        stse.marginRect.left = wcstol(sl.RemoveHead(), NULL, 10);
-        stse.marginRect.right = wcstol(sl.RemoveHead(), NULL, 10);
-        stse.marginRect.top = stse.marginRect.bottom = wcstol(sl.RemoveHead(), NULL, 10);
-        if(fields == 10) stse.marginRect.bottom = wcstol(sl.RemoveHead(), NULL, 10);
+        stse.marginRect.left = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
+        stse.marginRect.right = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
+        stse.marginRect.top = stse.marginRect.bottom = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
+        if(fields == 10) stse.marginRect.bottom = vsfm::WcsToL(sl.RemoveHead(), NULL, 10);
         stse.effect = sl.RemoveHead();
         stse.str = sl.RemoveHead();
     }
@@ -256,16 +296,21 @@ static void vsfilter_push_packet(csri_inst *inst, const void *packet, size_t pac
     }
 }
 
+static void vsfilter_push_packet(csri_inst *inst, const void *packet, size_t packetlen, double pts_start, double pts_end)
+{
+    NoThrow([&] { PushPacket(inst, packet, packetlen, pts_start, pts_end); });
+}
+
 static void vsfilter_discard(csri_inst *inst, int all)
 {
-    if (inst && inst->rts) {
+    NoThrow([&] { if (inst && inst->rts) {
         // VSFilter's RTS doesn't have an exact "discard" per-se for streaming,
         // but we can remove all entries if `all` is requested (similar to NewSegment).
         if (all) {
             inst->rts->RemoveAll();
             inst->rts->CreateSegments();
         }
-    }
+    } });
 }
 
 static struct csri_stream_ext vsfilter_stream_ext = {
@@ -307,7 +352,7 @@ static struct csri_info csri_vsfilter_info =
     // 2.38-0611-4 fixes be1-dots and ugly-fade bugs and adds xbord/ybord/xshad/yshad/blur tags and extends be
     // 2.39 merges with guliverkli2 fork
 #ifdef _VSMOD
-    "VSFilterMod/TextSub (guliverkli2)", // longname
+    "VSFilterMod/TextSub " VSFM_VERSION " (cross-platform)", // longname
 #else
     "VSFilter/TextSub (guliverkli2)", // longname
 #endif
@@ -337,3 +382,156 @@ CSRIAPI csri_rend *csri_renderer_next(csri_rend *prev)
 {
     return 0;
 }
+
+/* -----------------------------------------------------------------------
+ * TypeSub editor integration (interface version 1).
+ *
+ * Self-description of the extension tags this renderer understands beyond
+ * the core ASS override set. Editors (TypeSub) look this symbol up with
+ * GetProcAddress/dlsym after loading the plugin and merge the table into
+ * their autocompletion -- so adding a new tag here never requires an
+ * editor release. The symbol is OPTIONAL: hosts must fall back to their
+ * built-in table when it is absent, and renderers without extensions may
+ * simply not export it.
+ *
+ * Returns a pointer to a static UTF-8 JSON document owned by the plugin,
+ * valid for the plugin's lifetime:
+ *   { "version": 1, "renderer": "<name>",
+ *     "tags": [ { "name": "1img", "signature": "\1img(file[,x,y[,angle]])",
+ *                 "help": "one-line description" }, ... ] }
+ * --------------------------------------------------------------------- */
+CSRIAPI const char *csri_typesub_tags_json(void)
+{
+    return R"json({
+  "version": 1,
+  "renderer": "vsfiltermod-cgyihai",
+  "tags": [
+    {
+      "name": "1img",
+      "signature": "\\1img(file[,x,y[,angle]])",
+      "help": "主体填充位图（路径相对字幕文件）"
+    },
+    {
+      "name": "2img",
+      "signature": "\\2img(file[,x,y[,angle]])",
+      "help": "边框填充位图"
+    },
+    {
+      "name": "3img",
+      "signature": "\\3img(file[,x,y[,angle]])",
+      "help": "阴影填充位图"
+    },
+    {
+      "name": "4img",
+      "signature": "\\4img(file[,x,y[,angle]])",
+      "help": "次要填充位图"
+    },
+    {
+      "name": "1vc",
+      "signature": "\\1vc(&Hc1&,&Hc2&,&Hc3&,&Hc4&)",
+      "help": "主体四角渐变色"
+    },
+    {
+      "name": "2vc",
+      "signature": "\\2vc(&Hc1&,&Hc2&,&Hc3&,&Hc4&)",
+      "help": "边框四角渐变色"
+    },
+    {
+      "name": "3vc",
+      "signature": "\\3vc(&Hc1&,&Hc2&,&Hc3&,&Hc4&)",
+      "help": "阴影四角渐变色"
+    },
+    {
+      "name": "4vc",
+      "signature": "\\4vc(&Hc1&,&Hc2&,&Hc3&,&Hc4&)",
+      "help": "次要四角渐变色"
+    },
+    {
+      "name": "1va",
+      "signature": "\\1va(&Ha1&,&Ha2&,&Ha3&,&Ha4&)",
+      "help": "主体四角渐变透明度"
+    },
+    {
+      "name": "2va",
+      "signature": "\\2va(&Ha1&,&Ha2&,&Ha3&,&Ha4&)",
+      "help": "边框四角渐变透明度"
+    },
+    {
+      "name": "3va",
+      "signature": "\\3va(&Ha1&,&Ha2&,&Ha3&,&Ha4&)",
+      "help": "阴影四角渐变透明度"
+    },
+    {
+      "name": "4va",
+      "signature": "\\4va(&Ha1&,&Ha2&,&Ha3&,&Ha4&)",
+      "help": "次要四角渐变透明度"
+    },
+    {
+      "name": "jitter",
+      "signature": "\\jitter(left,right,up,down,period[,seed])",
+      "help": "逐帧随机抖动"
+    },
+    {
+      "name": "distort",
+      "signature": "\\distort(x1,y1,x2,y2,x3,y3)",
+      "help": "三点双线性扭曲变形"
+    },
+    {
+      "name": "mover",
+      "signature": "\\mover(x1,y1,x2,y2,alp1,alp2,r1,r2[,t1,t2])",
+      "help": "径向位移（半径+透明度渐变）"
+    },
+    {
+      "name": "moves3",
+      "signature": "\\moves3(x1,y1,x2,y2,x3,y3[,t1,t2])",
+      "help": "二次贝塞尔曲线移动"
+    },
+    {
+      "name": "moves4",
+      "signature": "\\moves4(x1,y1,x2,y2,x3,y3,x4,y4[,t1,t2])",
+      "help": "三次贝塞尔曲线移动"
+    },
+    {
+      "name": "movevc",
+      "signature": "\\movevc(x1,y1[,x2,y2[,t1,t2]])",
+      "help": "移动矢量裁剪"
+    },
+    {
+      "name": "rnd",
+      "signature": "\\rnd(val)",
+      "help": "逐字随机偏移（xyz 同时）"
+    },
+    {
+      "name": "rndx",
+      "signature": "\\rndx(val)",
+      "help": "逐字随机 X 偏移"
+    },
+    {
+      "name": "rndy",
+      "signature": "\\rndy(val)",
+      "help": "逐字随机 Y 偏移"
+    },
+    {
+      "name": "rndz",
+      "signature": "\\rndz(val)",
+      "help": "逐字随机 Z 偏移"
+    },
+    {
+      "name": "z",
+      "signature": "\\z(val)",
+      "help": "Z 轴深度"
+    },
+    {
+      "name": "frs",
+      "signature": "\\frs(deg)",
+      "help": "字符自身朝向旋转"
+    },
+    {
+      "name": "fsc",
+      "signature": "\\fsc(pct)",
+      "help": "等比缩放（x/y 同时）"
+    }
+  ]
+})json";
+}
+
