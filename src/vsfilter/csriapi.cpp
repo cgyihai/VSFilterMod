@@ -382,3 +382,156 @@ CSRIAPI csri_rend *csri_renderer_next(csri_rend *prev)
 {
     return 0;
 }
+
+/* -----------------------------------------------------------------------
+ * TypeSub editor integration (interface version 1).
+ *
+ * Self-description of the extension tags this renderer understands beyond
+ * the core ASS override set. Editors (TypeSub) look this symbol up with
+ * GetProcAddress/dlsym after loading the plugin and merge the table into
+ * their autocompletion -- so adding a new tag here never requires an
+ * editor release. The symbol is OPTIONAL: hosts must fall back to their
+ * built-in table when it is absent, and renderers without extensions may
+ * simply not export it.
+ *
+ * Returns a pointer to a static UTF-8 JSON document owned by the plugin,
+ * valid for the plugin's lifetime:
+ *   { "version": 1, "renderer": "<name>",
+ *     "tags": [ { "name": "1img", "signature": "\1img(file[,x,y[,angle]])",
+ *                 "help": "one-line description" }, ... ] }
+ * --------------------------------------------------------------------- */
+CSRIAPI const char *csri_typesub_tags_json(void)
+{
+    return R"json({
+  "version": 1,
+  "renderer": "vsfiltermod-cgyihai",
+  "tags": [
+    {
+      "name": "1img",
+      "signature": "\\1img(file[,x,y[,angle]])",
+      "help": "主体填充位图（路径相对字幕文件）"
+    },
+    {
+      "name": "2img",
+      "signature": "\\2img(file[,x,y[,angle]])",
+      "help": "边框填充位图"
+    },
+    {
+      "name": "3img",
+      "signature": "\\3img(file[,x,y[,angle]])",
+      "help": "阴影填充位图"
+    },
+    {
+      "name": "4img",
+      "signature": "\\4img(file[,x,y[,angle]])",
+      "help": "次要填充位图"
+    },
+    {
+      "name": "1vc",
+      "signature": "\\1vc(&Hc1&,&Hc2&,&Hc3&,&Hc4&)",
+      "help": "主体四角渐变色"
+    },
+    {
+      "name": "2vc",
+      "signature": "\\2vc(&Hc1&,&Hc2&,&Hc3&,&Hc4&)",
+      "help": "边框四角渐变色"
+    },
+    {
+      "name": "3vc",
+      "signature": "\\3vc(&Hc1&,&Hc2&,&Hc3&,&Hc4&)",
+      "help": "阴影四角渐变色"
+    },
+    {
+      "name": "4vc",
+      "signature": "\\4vc(&Hc1&,&Hc2&,&Hc3&,&Hc4&)",
+      "help": "次要四角渐变色"
+    },
+    {
+      "name": "1va",
+      "signature": "\\1va(&Ha1&,&Ha2&,&Ha3&,&Ha4&)",
+      "help": "主体四角渐变透明度"
+    },
+    {
+      "name": "2va",
+      "signature": "\\2va(&Ha1&,&Ha2&,&Ha3&,&Ha4&)",
+      "help": "边框四角渐变透明度"
+    },
+    {
+      "name": "3va",
+      "signature": "\\3va(&Ha1&,&Ha2&,&Ha3&,&Ha4&)",
+      "help": "阴影四角渐变透明度"
+    },
+    {
+      "name": "4va",
+      "signature": "\\4va(&Ha1&,&Ha2&,&Ha3&,&Ha4&)",
+      "help": "次要四角渐变透明度"
+    },
+    {
+      "name": "jitter",
+      "signature": "\\jitter(left,right,up,down,period[,seed])",
+      "help": "逐帧随机抖动"
+    },
+    {
+      "name": "distort",
+      "signature": "\\distort(x1,y1,x2,y2,x3,y3)",
+      "help": "三点双线性扭曲变形"
+    },
+    {
+      "name": "mover",
+      "signature": "\\mover(x1,y1,x2,y2,alp1,alp2,r1,r2[,t1,t2])",
+      "help": "径向位移（半径+透明度渐变）"
+    },
+    {
+      "name": "moves3",
+      "signature": "\\moves3(x1,y1,x2,y2,x3,y3[,t1,t2])",
+      "help": "二次贝塞尔曲线移动"
+    },
+    {
+      "name": "moves4",
+      "signature": "\\moves4(x1,y1,x2,y2,x3,y3,x4,y4[,t1,t2])",
+      "help": "三次贝塞尔曲线移动"
+    },
+    {
+      "name": "movevc",
+      "signature": "\\movevc(x1,y1[,x2,y2[,t1,t2]])",
+      "help": "移动矢量裁剪"
+    },
+    {
+      "name": "rnd",
+      "signature": "\\rnd(val)",
+      "help": "逐字随机偏移（xyz 同时）"
+    },
+    {
+      "name": "rndx",
+      "signature": "\\rndx(val)",
+      "help": "逐字随机 X 偏移"
+    },
+    {
+      "name": "rndy",
+      "signature": "\\rndy(val)",
+      "help": "逐字随机 Y 偏移"
+    },
+    {
+      "name": "rndz",
+      "signature": "\\rndz(val)",
+      "help": "逐字随机 Z 偏移"
+    },
+    {
+      "name": "z",
+      "signature": "\\z(val)",
+      "help": "Z 轴深度"
+    },
+    {
+      "name": "frs",
+      "signature": "\\frs(deg)",
+      "help": "字符自身朝向旋转"
+    },
+    {
+      "name": "fsc",
+      "signature": "\\fsc(pct)",
+      "help": "等比缩放（x/y 同时）"
+    }
+  ]
+})json";
+}
+
