@@ -181,6 +181,14 @@
   than two colours disables the effect. TypeSub tag metadata
   includes the new tag.
 
+- `\shadblur(radius)` / `ordblur(radius)`: per-layer gaussian
+  blur. The shadow / outline pass re-rasterizes the word overlay
+  with the layer-specific radius added to the base `lur` value,
+  so the body can stay crisp while the shadow diffuses (or vice
+  versa). Both forms support compact syntax (`\shadblur4`), `	`
+  animation, and zero disables the extra blur. TypeSub tag metadata
+  includes the new tags.
+
 - `csri_open_file`/`csri_open_mem` share one instance-setup path; remaining
   POSIX portability and build documentation work.
 

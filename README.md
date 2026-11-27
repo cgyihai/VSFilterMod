@@ -257,6 +257,13 @@ copy. Every effect is captured exactly (glow, gradients, blur).
 `count` caps at 32. `\echo0` disables; `\t` animates all
 parameters. Event-level: the last override block wins for the line.
 
+### `\shadblur(radius)` / `ordblur(radius)` — per-layer blur
+
+Gaussian blur applied to one layer only: the shadow / outline pass
+re-rasterizes the overlay with the layer radius added to the base
+`lur`. Crisp body with diffused shadow, or soft border over sharp
+fill. Compact form `\shadblur4`, `	` animation, zero disables.
+
 ### `\mgrad(c1,c2[,c3,...])` — multi-stop gradient
 
 Two to eight colour stops in ASS hex order, evenly spaced along the

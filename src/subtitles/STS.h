@@ -247,6 +247,11 @@ public:
     double mod_echoDx;
     double mod_echoDy;
     double mod_echoFalloff;
+    // patch m023. per-layer blur: additional gaussian radius for the
+    // shadow / outline passes, same units as \blur. The word overlay is
+    // re-rasterized per pass with the pass-specific total blur.
+    double mod_shadBlur;
+    double mod_bordBlur;
     // patch m021. corner pin
     bool mod_pinEnabled;
     double mod_pinX[4], mod_pinY[4];

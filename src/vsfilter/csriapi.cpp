@@ -533,6 +533,16 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "help": "多色渐变；2-8 个 ASS 十六进制色标沿 vgrad 角度或 rgrad 径向均布，未设置时水平，\\mgrad0 关闭"
     },
     {
+      "name": "shadblur",
+      "signature": "\\shadblur(radius)",
+      "help": "阴影独立羽化；与 \\blur 加算，仅作用阴影层，\\shadblur0 关闭"
+    },
+    {
+      "name": "bordblur",
+      "signature": "\\bordblur(radius)",
+      "help": "描边独立羽化；与 \\blur 加算，仅作用描边层，\\bordblur0 关闭"
+    },
+    {
       "name": "pin",
       "signature": "\\pin(x1,y1,x2,y2,x3,y3,x4,y4)",
       "help": "四角钉扎透视；行布局盒四角（自左上顺时针）映射到输出像素四角点，\\pin0 关闭"

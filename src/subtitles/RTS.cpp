@@ -1958,6 +1958,13 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
             }
 #endif
             w->Paint(CPoint(x, y), worg);
+#ifdef _VSMOD // patch m023. per-layer blur
+            /* Each pass re-rasterizes the overlay at its own blur level
+             * whenever a per-layer blur is active; the rasterized path
+             * is shared, only the final blur compositing differs. */
+            if(w->m_style.mod_shadBlur != 0 || w->m_style.mod_bordBlur != 0)
+                w->Rasterize(x & 7, y & 7, w->m_style.fBlur, w->m_style.fGaussianBlur + w->m_style.mod_shadBlur);
+#endif
 #else
             w->Paint(CPoint(x, y), org);
 #endif
@@ -2095,6 +2102,13 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
             }
 #endif
             w->Paint(CPoint(x, y), worg);
+#ifdef _VSMOD // patch m023. per-layer blur
+            /* Each pass re-rasterizes the overlay at its own blur level
+             * whenever a per-layer blur is active; the rasterized path
+             * is shared, only the final blur compositing differs. */
+            if(w->m_style.mod_shadBlur != 0 || w->m_style.mod_bordBlur != 0)
+                w->Rasterize(x & 7, y & 7, w->m_style.fBlur, w->m_style.fGaussianBlur + w->m_style.mod_bordBlur);
+#endif
 #else
             w->Paint(CPoint(x, y), org);
 #endif
@@ -2246,6 +2260,13 @@ CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoin
             }
 #endif
         w->Paint(CPoint(x, y), worg);
+#ifdef _VSMOD // patch m023. per-layer blur
+        /* Each pass re-rasterizes the overlay at its own blur level
+         * whenever a per-layer blur is active; the rasterized path
+         * is shared, only the final blur compositing differs. */
+        if(w->m_style.mod_shadBlur != 0 || w->m_style.mod_bordBlur != 0)
+            w->Rasterize(x & 7, y & 7, w->m_style.fBlur, w->m_style.fGaussianBlur);
+#endif
         #else
         w->Paint(CPoint(x, y), org);
         #endif
@@ -3087,6 +3108,20 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             params.Add(cmd.Mid(1)), cmd = cmd.Left(1);
         else if(!cmd.Find(L"blur"))
             params.Add(cmd.Mid(4)), cmd = cmd.Left(4);
+#ifdef _VSMOD // patch m023. per-layer blur: must precede the bord prefix branch
+        else if(!cmd.Find(L"bordblur"))
+        {
+            if(cmd.GetLength() > 8)
+            {
+                const WCHAR suffixStart = cmd[8];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(8));
+                    cmd = cmd.Left(8);
+                }
+            }
+        }
+#endif
         else if(!cmd.Find(L"bord"))
             params.Add(cmd.Mid(4)), cmd = cmd.Left(4);
 #ifdef _VSMOD // patch m014. bevel: must precede the be/b prefix branches
@@ -3326,6 +3361,20 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
 #endif
         else if(!cmd.Find(L"r"))
             params.Add(cmd.Mid(1)), cmd = cmd.Left(1);
+#ifdef _VSMOD // patch m023. per-layer blur: must precede the shad prefix branch
+        else if(!cmd.Find(L"shadblur"))
+        {
+            if(cmd.GetLength() > 8)
+            {
+                const WCHAR suffixStart = cmd[8];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(8));
+                    cmd = cmd.Left(8);
+                }
+            }
+        }
+#endif
         else if(!cmd.Find(L"shad"))
             params.Add(cmd.Mid(4)), cmd = cmd.Left(4);
         else if(!cmd.Find(L"s"))
@@ -3691,6 +3740,27 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                                   ? (n < 0 ? 0 : n)
                                       : org.fGaussianBlur;
         }
+#ifdef _VSMOD // patch m023. per-layer blur
+        /* \shadblur(r) / \bordblur(r): additional gaussian blur radius for
+         * the shadow / outline pass only, in the same units as \blur. The
+         * effective pass blur is additive: \blur1 plus \shadblur2 renders
+         * the shadow at radius 3 while the body stays at 1. Zero disables
+         * the extra blur; both support \t animation. */
+        else if(cmd == L"shadblur")
+        {
+            double n = CalcAnimation(vsfm::WcsToD(p, NULL), style.mod_shadBlur, fAnimate);
+            style.mod_shadBlur = !p.IsEmpty()
+                                 ? (n < 0 ? 0 : n > 64 ? 64 : n)
+                                     : org.mod_shadBlur;
+        }
+        else if(cmd == L"bordblur")
+        {
+            double n = CalcAnimation(vsfm::WcsToD(p, NULL), style.mod_bordBlur, fAnimate);
+            style.mod_bordBlur = !p.IsEmpty()
+                                 ? (n < 0 ? 0 : n > 64 ? 64 : n)
+                                     : org.mod_bordBlur;
+        }
+#endif
         else if(cmd == L"bord")
         {
             double dst = vsfm::WcsToD(p, NULL);

@@ -133,6 +133,12 @@
   IEEE 双精度分段线性插值（跨平台位一致）；`\mgrad0` 或不足两
   个颜色时关闭。TypeSub 标签元数据已包含新标签。
 
+- `\shadblur(radius)` / `ordblur(radius)`：分层高斯羽化。阴影/
+  描边 pass 以该层专属半径加算基础 `lur` 重光栅化字形覆盖层，
+  正文可保持锐利而阴影扩散（或反之）。支持紧凑写法
+  （`\shadblur4`）、`	` 动画，零值关闭额外羽化。TypeSub 标签
+  元数据已包含新标签。
+
 - `csri_open_file`/`csri_open_mem` 合并为同一实例初始化路径；其余 POSIX
   移植与构建文档工作。
 
