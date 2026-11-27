@@ -3838,6 +3838,10 @@ bool MOD_GRADIENT::operator == (MOD_GRADIENT& mg)
             && mode[3] == mg.mode[3]
             && angleEnabled == mg.angleEnabled
             && angle == mg.angle
+            && radialEnabled == mg.radialEnabled
+            && radialScale == mg.radialScale
+            && radialCx == mg.radialCx
+            && radialCy == mg.radialCy
             && b_images[0] == mg.b_images[0]
             && b_images[1] == mg.b_images[1]
             && b_images[2] == mg.b_images[2]
@@ -3866,6 +3870,10 @@ void MOD_GRADIENT::clear()
     angle = 0;
     angleCos = 1;
     angleSin = 0;
+    radialEnabled = false;
+    radialScale = 1;
+    radialCx = 0.5;
+    radialCy = 0.5;
 }
 
 #include <math.h>
@@ -3876,6 +3884,46 @@ DWORD MOD_GRADIENT::getmixcolor(int tx, int ty, int i) // too slow T.T
     // gradient
     if(mode[i] == 1)
     {
+        // patch m016. radial gradient: interpolate between the first two
+        // gradient colours along the distance from the centre. The radius
+        // cap is the centre's distance to the farthest box corner times the
+        // user scale (CSS farthest-corner semantics), so scale 1 always
+        // reaches the end colour at the farthest corner. radialCx/radialCy
+        // are screen-orientation UVs (0 = left/top) while the ty axis of
+        // this coordinate system runs bottom-up (pinned empirically by
+        // tests/rgrad.py), hence the vertical flip.
+        // sqrt() is an IEEE-754 correctly-rounded operation, so it is
+        // bit-reproducible across platforms and needs no det_math wrapper.
+        if(radialEnabled && width > 0 && height > 0)
+        {
+            const double cx = radialCx * width;
+            const double cy = (1.0 - radialCy) * height;
+            const double dx = tx - cx;
+            const double dy = ty - cy;
+            double cap2 = 0;
+            const double exs[2] = {cx, width - cx};
+            const double eys[2] = {cy, height - cy};
+            for(int xi = 0; xi < 2; xi++)
+                for(int yi = 0; yi < 2; yi++)
+                {
+                    const double d2 = exs[xi] * exs[xi] + eys[yi] * eys[yi];
+                    if(d2 > cap2) cap2 = d2;
+                }
+            const double cap = radialScale * sqrt(cap2);
+            double t = cap > 0 ? sqrt(dx * dx + dy * dy) / cap : 0;
+            if(t < 0) t = 0;
+            if(t > 1) t = 1;
+            DWORD colora = 0;
+            for(int j = 0; j < 3; j++)
+            {
+                const double cs = (color[i][0] >> (8 * j)) & 0xff;
+                const double ce = (color[i][1] >> (8 * j)) & 0xff;
+                colora |= ((DWORD)(cs * (1 - t) + ce * t) & 0xff) << (8 * j);
+            }
+            const DWORD al = (DWORD)(alpha[i][0] * (1 - t) + alpha[i][1] * t) & 0xff;
+            colora |= (((0xff - al) * (0xff - fadalpha)) & 0xff00) << 16;
+            return colora;
+        }
         // patch m015. arbitrary-angle gradient: project the pixel position
         // onto the gradient direction and interpolate between the first two
         // gradient colours (start/end). The projection range comes from the

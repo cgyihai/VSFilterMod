@@ -102,6 +102,18 @@ public:
     double      angleCos;
     double      angleSin;
 
+    // patch m016. radial gradient: when enabled, mode-1 gradients interpolate
+    // linearly between colors [0] (centre) and [1] (edge) along the distance
+    // from a centre point. radialCx/radialCy are the centre as a UV fraction
+    // of the glyph box in screen orientation (0.5/0.5 = centre); radialScale
+    // multiplies the radius cap, which is the distance from the centre to
+    // the farthest box corner (CSS farthest-corner semantics). Mutually
+    // exclusive with the angle gradient; the later tag wins.
+    bool        radialEnabled;
+    double      radialScale;
+    double      radialCx;
+    double      radialCy;
+
 // for renderer
     int		height;
     int		width;

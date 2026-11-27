@@ -483,6 +483,11 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "help": "任意角度渐变：配合 \\1vc 使用，前两个颜色为起止色"
     },
     {
+      "name": "rgrad",
+      "signature": "\\rgrad(scale[,cx,cy])",
+      "help": "径向渐变：配合 \\1vc 使用，中心色向边缘色辐射；\\rgrad1 简写，\\rgrad0 关闭"
+    },
+    {
       "name": "glowc",
       "signature": "\\glowc&HBBGGRR&",
       "help": "发光颜色覆盖（默认跟随主要颜色）"

@@ -160,7 +160,7 @@ animation and a zero value disables:
 {\iglow8}            inner glow, radius 8: light bleeding inward from glyph edges
 {\iglow(8,1.5)}      with strength; \iglowc / \iglowa override colour/alpha (default white)
 {\mblur45,10}        directional motion blur, 45 degrees over 10 output pixels
-{evel2}            smooth bevel/emboss relief of size 2
+{\bevel2}            smooth bevel/emboss relief of size 2
 {\clipf15}           feathered clip edges, radius 15: rect, vector and inverse clips
 ```
 
@@ -170,6 +170,28 @@ integer arithmetic. \clipf softens the line's clip: rectangular clips expand
 their raster region and fade outside the nominal rectangle, while vector clip
 masks are blurred once after parsing so every drawing and glow path inherits
 the soft edge. The regression suite tests/fxpackage.py covers the package.
+
+### Gradients (\1vc, \vgrad, \rgrad)
+
+The classic \1vc/\2vc/\3vc/\4vc tags interpolate four corner colours
+bilinearly across each word. Two modifiers reshape that interpolation; both
+use the first two vc colours as start and end, support \t animation and are
+mutually exclusive — the later tag wins:
+
+```ass
+{\1vc(&H0000FF&,&HFF0000&,&H0000FF&,&HFF0000&)\vgrad45}linear gradient along 45 degrees
+{\1vc(&H0000FF&,&HFF0000&,&H0000FF&,&HFF0000&)\rgrad1}radial gradient, centred
+{\rgrad(1.5,0.5,0.2)}scaled 1.5x, centre at 50% width / 20% height
+{\rgrad0}back to the bilinear corner mix
+```
+
+\vgrad(angle) projects the glyph box onto a direction in degrees (0 runs left
+to right, 90 top to bottom). \rgrad(scale[,cx,cy]) radiates from a centre
+point: the first vc colour sits at the centre and blends into the second at
+the cap radius, which is the scaled distance from the centre to the farthest
+box corner; cx/cy are the centre as a UV fraction of the box in screen
+orientation and default to the box centre. The regression suites
+tests/vgrad.py and tests/rgrad.py pin the semantics.
 
 ### RGB split (\rgb)
 

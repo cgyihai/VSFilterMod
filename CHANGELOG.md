@@ -34,6 +34,19 @@
   classic bilinear mix. Regression suite tests/vgrad.py verifies direction,
   reversal and syntax equivalence.
 
+### Radial gradient
+
+- \rgrad(scale[,cx,cy]): with a \1vc-style gradient active, colours radiate
+  from a centre point: the first vc colour sits at the centre and blends
+  linearly into the second at the cap radius, which is the scaled distance
+  from the centre to the farthest box corner (CSS farthest-corner semantics).
+  cx/cy position the centre as a UV fraction of the glyph box in screen
+  orientation (0.5/0.5, the default, is the box centre; values outside [0,1]
+  are allowed). \rgrad1 is the shorthand, \rgrad0 disables, \t animation is
+  supported, and \vgrad/\rgrad are mutually exclusive with the later tag
+  winning. Regression suite tests/rgrad.py verifies the centre/edge falloff,
+  scale, centre orientation, syntax equivalence, mode exclusion and reset.
+
 ### Effect package
 
 - \glowc&HBBGGRR& and \glowa&HAA&: optional glow colour and alpha

@@ -3,10 +3,13 @@
 ## 构建与测试（Windows + MSVC）
 
 - 不要复用旧的 `build/`（指向迁移前的旧源路径）。用 `build-glow/` 或新建目录配置。
+- `set PYTHONUTF8=0` 必须：Python 3.15 默认 UTF-8 模式，而 MSVC lib.exe 输出 GBK 中文，
+  meson 重配置按 UTF-8 解码失败（detect_static_linker AttributeError: NoneType）。
 - 构建：
   ```bat
   call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
   set "PATH=%APPDATA%\Python\Python315\Scripts;%PATH%"
+  set PYTHONUTF8=0
   meson compile -C build-glow
   meson test -C build-glow --print-errorlogs
   ```
@@ -28,43 +31,46 @@
 
 ## 特效包路线图（2025 更新）
 
-已完成并发布（v1.6.0 / Windows v2.7.0）：
-- \glow bloom 发光、
-gb 色差
-- \glowc/\glowa 发光颜色与透明度覆盖
-- \iglow(/\iglowc/\iglowa) 内发光
-- \mblur(angle,length) 方向动态模糊
-- evel(size[,strength]) 平滑浮雕
-- \clipf(radius) 羽化裁剪（矩形/矢量/反向）
+已完成并发布：
+- v1.6.0 / Windows v2.7.0：\glow bloom 发光、\rgb 色差、\glowc/\glowa 发光颜色
+  与透明度覆盖、\iglow(/\iglowc/\iglowa) 内发光、\mblur(angle,length) 方向
+  动态模糊、\bevel(size[,strength]) 平滑浮雕、\clipf(radius) 羽化裁剪（矩形/矢量/反向）
+- v1.7.0 / Windows v2.8.0：\vgrad(angle) 任意角度线性渐变
+- v1.8.0 / Windows v2.9.0：\rgrad(scale[,cx,cy]) 径向渐变
 
-测试：tests/fxpackage.py 覆盖全部特效；meson test 13 通过 1 跳过。
+测试：tests/fxpackage.py + vgrad.py + rgrad.py；meson test 15 通过 1 跳过。
 
-剩余候选（未做）：径向/任意角度渐变、混合模式（加算）、真透视 3D、轨道遮罩。
+剩余候选（未做）：混合模式（加算）、真透视 3D、轨道遮罩。
 
 移植注意：Windows 树用 wcstod/wcstol/cos/sin/pow 替代 vsfm::WcsTo*/Det*；
 提取跨平台补丁块时注意注释标记歧义（"patch m014. inner glow" 在解析器
 前缀链与渲染循环各出现一次，提取必须带第二行上下文）。
 
-## 下一个史诗：任意角度/径向渐变（已分析，未实施）
+**文档编辑教训**：用 python heredoc 写含反斜杠的文档时，\1 \r \v \t \b \f 会被
+Python 转义成控制字符（本文件和 README/CHANGELOG 都被污染过）。安全做法：
+edit/write 工具直写，或 python 里用 chr(92) 拼接。写完用控制字符扫描验证。
 
-现有渐变架构（patch m004）：
-- `MOD_GRADIENT`（STS.h ~L87）：`color[4][4]`/`alpha[4][4]` 存四角颜色，
-  `mode[i]` 1=双线性四角插值、2=PNG 背景；`width/height` 是字形包围盒。
-- 渲染时 `getmixcolor(tx, ty, i)`（STS.cpp ~L3866）逐像素算混合色，
-  在 Rasterizer.cpp 的 6+ 个 pixmix 调用点被调用（~L1176-1283）。
-- 解析标签 `vc`/`vc`/`va` 等在 RTS.cpp ParseSSATag。
+## 渐变实现要点（vgrad/rgrad，改渐变前必读）
 
-设计方案（供实施者参考）：
-- 新标签建议 `vg(angle)` 或给 vc 加角度参数——注意与现有 vc 语义兼容。
-- 实现要点：在 mode[i]==1 分支前加 angle 模式（建议 mode=3），把双线性
-  权重替换为沿角度方向的投影 t=(x*cos+y*sin)/len，两端颜色插值。
-- 必须用 det_math 的 DetCos/DetSin 保持跨平台确定性；Windows 树用 cos/sin。
-- 渐变的 width/height 在 RTS.cpp L1646 附近随 subpix 一起设置。
-- 移植注意：两树的 Rasterizer.cpp pixmix 调用点结构一致但行号不同。
+架构（patch m004 + m015 + m016）：
+- `MOD_GRADIENT`（STS.h）：`color[4][4]`/`alpha[4][4]` 四角颜色（顺序 [TL,TR,BL,BR]），
+  `mode[i]` 1=双线性四角插值、2=PNG 背景；渲染用的 `width/height/xoffset/yoffset`
+  是逐词 overlay 位图尺寸与裁剪偏移，在 Rasterizer.cpp ~L1430 设置（不是 RTS.cpp）。
+- `getmixcolor(tx, ty, i)`（STS.cpp）逐像素算混合色，在 Rasterizer.cpp 的 6+ 个
+  pixmix 调用点被调用；rgrad 分支在 vgrad 分支之前，两者都在 mode[i]==1 内。
+- 坐标系：`tx += xoffset` 后是 overlay 空间；**ty 轴原点在屏幕底部**（向上递增），
+  所以 radialCy（屏幕 UV，0=顶）必须翻转为 `(1-cy)*height`；水平方向不翻转。
+  该结论由 tests/rgrad.py 中心偏移测试实证钉死，不要"修正"。
+- `sqrt()` 是 IEEE-754 正确舍入运算，跨平台位一致，无需 det_math 包装；
+  sin/cos/pow 才需要 DetCos/DetSin/DetPow（Windows 树用 libm 对应物）。
+- \vgrad 与 \rgrad 互斥（后写赢）：解析时启用一个清除另一个；裸标签各自从 org
+  重置自己的字段，不触碰对方。radialScale 钳制 [0,64]，cx/cy 不钳制（允许盒外中心）。
+- \r 前缀吞噬教训同样适用于 rgrad：前缀链必须置于 `\r` 分支之前（rgb 旁）。
+- 省略的可选参数回默认值而非当前值（bevel/mblur 惯例）：\rgrad(2) 会把 cx/cy 重置为 0.5。
 
 其他候选史诗（均未做，各需完整会话）：
 - 混合模式（加算/屏幕）——需改 CSRI/子图合成架构，工程量最大
-- 真透视 3D（rxry 目前是正交近似）——研究级
+- 真透视 3D（\frx\fry 目前是正交近似）——研究级
 - 轨道遮罩——语法设计+实现都复杂
 
 ## 旧版路线图存档

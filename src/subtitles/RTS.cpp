@@ -2717,6 +2717,23 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             }
         }
 #endif
+#ifdef _VSMOD // patch m016. radial gradient
+        /* Must precede the 
+ prefix branch, which would otherwise eat the
+         * tag as a style reset. */
+        else if(!cmd.Find(L"rgrad"))
+        {
+            if(cmd.GetLength() > 5)
+            {
+                const WCHAR suffixStart = cmd[5];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(5));
+                    cmd = cmd.Left(5);
+                }
+            }
+        }
+#endif
 #ifdef _VSMOD // patch m013. RGB split
         /* Must precede the 
  prefix branch, which would otherwise eat the
@@ -2943,6 +2960,9 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                 const double na = CalcAnimation(ang, style.mod_grad.angle, fAnimate);
                 style.mod_grad.angle = na;
                 style.mod_grad.angleEnabled = true;
+                // patch m016. radial gradient: the two gradient modes are
+                // mutually exclusive, the later tag wins.
+                style.mod_grad.radialEnabled = false;
                 const double rad = na * 3.14159265358979323846 / 180.0;
                 style.mod_grad.angleCos = vsfm::DetCos(rad);
                 style.mod_grad.angleSin = vsfm::DetSin(rad);
@@ -2955,6 +2975,35 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                 style.mod_grad.angleSin = org.mod_grad.angleSin;
             }
         }
+#endif
+#ifdef _VSMOD // patch m016. radial gradient
+        else if(cmd == L"rgrad")
+        {
+            if(params.GetCount() > 0)
+            {
+                const double scale = vsfm::WcsToD(params[0], NULL);
+                const double cx = params.GetCount() > 1 ? vsfm::WcsToD(params[1], NULL) : 0.5;
+                const double cy = params.GetCount() > 2 ? vsfm::WcsToD(params[2], NULL) : 0.5;
+                const double ns = CalcAnimation(scale, style.mod_grad.radialScale, fAnimate);
+                style.mod_grad.radialScale = !(ns > 0) ? 0 : ns > 64 ? 64 : ns;
+                style.mod_grad.radialCx = CalcAnimation(cx, style.mod_grad.radialCx, fAnimate);
+                style.mod_grad.radialCy = CalcAnimation(cy, style.mod_grad.radialCy, fAnimate);
+                style.mod_grad.radialEnabled = style.mod_grad.radialScale > 0;
+                // the two gradient modes are mutually exclusive, the later
+                // tag wins.
+                if(style.mod_grad.radialEnabled)
+                    style.mod_grad.angleEnabled = false;
+            }
+            else
+            {
+                style.mod_grad.radialScale = org.mod_grad.radialScale;
+                style.mod_grad.radialCx = org.mod_grad.radialCx;
+                style.mod_grad.radialCy = org.mod_grad.radialCy;
+                style.mod_grad.radialEnabled = org.mod_grad.radialEnabled;
+            }
+        }
+#endif
+#ifdef _VSMOD // patch m004. gradient colors
         else if(cmd == L"1vc" || cmd == L"2vc" || cmd == L"3vc" || cmd == L"4vc")
         {
             int i = cmd[0] - '1';
