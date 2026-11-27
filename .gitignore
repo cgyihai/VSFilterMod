@@ -18,3 +18,4 @@ subprojects/zlib.wrap
 subprojects/.wraplock
 __pycache__/
 build-glow/
+*.log
