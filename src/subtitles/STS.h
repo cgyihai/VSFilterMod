@@ -233,6 +233,12 @@ public:
     double mod_waveAmp;
     double mod_waveFreq;
     double mod_wavePhase;
+    double mod_extrudeDepth;
+    double mod_extrudeAngle;
+    double mod_echoCount;
+    double mod_echoDx;
+    double mod_echoDy;
+    double mod_echoFalloff;
 #endif
 
     STSStyle();

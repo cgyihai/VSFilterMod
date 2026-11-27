@@ -135,6 +135,26 @@
   the line: it does not depend on screen position. TypeSub tag
   metadata includes the new tag.
 
+- `\extrude(depth[,angle])`: 3D extrusion -- shadow-colour copies of
+  each glyph at 1px steps along the extrusion direction (default 45
+  degrees in screen coordinates: 0 = right, 90 = down), forming the
+  solid side faces of the text. The copies reuse the rasterized word
+  (pure compositing, no re-transform), render even with zero shadow
+  depth, take their colour and alpha from the shadow style (`\4c`/`\4a`),
+  support `\t` animation, and `\extrude0` disables the effect.
+
+- `\echo(count,dx,dy[,falloff])`: motion-trail copies of the whole event.
+  The event renders into an offscreen canvas which is composited
+  once per copy at stepped integer offsets with alpha scaled by
+  `falloff` per step (default 0.5), then once more at full alpha;
+  every effect (glow, gradients, blur, transforms) is captured
+  exactly. `count` caps at 32 copies, `\t` animation is supported,
+  `\echo0` disables the effect. The effect is event-level: the
+  parameters of the last override block apply to the whole line,
+  and a track-matte consumption takes precedence over echo when
+  both apply to the same event. TypeSub tag metadata includes the
+  new tags.
+
 - `csri_open_file`/`csri_open_mem` share one instance-setup path; remaining
   POSIX portability and build documentation work.
 

@@ -1,5 +1,5 @@
 project('vsfiltermod', 'c', 'cpp',
-    version : '1.11.0',
+    version : '1.12.0',
     license : 'GPL-2.0-or-later',
     meson_version : '>=0.59.0',
     default_options : [
@@ -376,6 +376,18 @@ if get_option('tests')
                  args : [files('tests/wave.py'),
                          vsfmrender.full_path(),
                          meson.current_build_dir() / 'wave-test'],
+                 depends : [vsfmrender],
+                 timeout : 120)
+            test('extrude', py,
+                 args : [files('tests/extrude.py'),
+                         vsfmrender.full_path(),
+                         meson.current_build_dir() / 'extrude-test'],
+                 depends : [vsfmrender],
+                 timeout : 120)
+            test('echo', py,
+                 args : [files('tests/echo.py'),
+                         vsfmrender.full_path(),
+                         meson.current_build_dir() / 'echo-test'],
                  depends : [vsfmrender],
                  timeout : 120)
         endif

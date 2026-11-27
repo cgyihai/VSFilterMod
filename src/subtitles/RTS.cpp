@@ -116,6 +116,47 @@ static void ExtractMatteCoverage(const std::vector<unsigned int>& pixels, std::v
  * matte scales both the color contribution and the coverage of each pixel,
  * which preserves the color ratio exactly for premultiplied content.
  * Clamped to bbox (the event's painted region) and the frame. */
+/* \echo(count,dx,dy[,falloff]): composite the offscreen event canvas into the
+ * frame shifted by an integer pixel offset with a uniform alpha scale. The
+ * canvas is premultiplied with the inverted-alpha internal representation;
+ * scaling both the colour contribution and the opacity preserves hue, exactly
+ * like the matte modulation. scale256 is 0..256. */
+static void CompositeEchoCanvas(const std::vector<unsigned int>& scratch, SubPicDesc& spd,
+                                int dx, int dy, int scale256, const CRect& bbox)
+{
+    if(bbox.IsRectEmpty() || scale256 <= 0) return;
+    const int left = (std::max)(0, (int)bbox.left + dx);
+    const int top = (std::max)(0, (int)bbox.top + dy);
+    const int right = (std::min)((int)spd.w, (int)bbox.right + dx);
+    const int bottom = (std::min)((int)spd.h, (int)bbox.bottom + dy);
+    for(int y = top; y < bottom; y++)
+    {
+        const unsigned int* srow = &scratch[(size_t)(y - dy) * spd.w];
+        unsigned int* drow = (unsigned int*)((BYTE*)spd.bits + y * spd.pitch);
+        for(int x = left; x < right; x++)
+        {
+            const unsigned int spx = srow[x - dx];
+            const unsigned int opacity = 0xff - (spx >> 24);
+            if(!opacity) continue;
+            const unsigned int sopacity = (opacity * scale256 + 128) >> 8;
+            if(!sopacity) continue;
+            const unsigned int sb = ((spx & 0xff) * scale256 + 128) >> 8;
+            const unsigned int sg = (((spx >> 8) & 0xff) * scale256 + 128) >> 8;
+            const unsigned int sr = (((spx >> 16) & 0xff) * scale256 + 128) >> 8;
+            const unsigned int inv = 255 - sopacity;
+            const unsigned int dpx = drow[x];
+            unsigned int db = sb + ((dpx & 0xff) * inv + 127) / 255;
+            unsigned int dg = sg + (((dpx >> 8) & 0xff) * inv + 127) / 255;
+            unsigned int dr = sr + (((dpx >> 16) & 0xff) * inv + 127) / 255;
+            unsigned int da = ((dpx >> 24) * inv + 127) / 255;
+            if(db > 255) db = 255;
+            if(dg > 255) dg = 255;
+            if(dr > 255) dr = 255;
+            drow[x] = db | (dg << 8) | (dr << 16) | (da << 24);
+        }
+    }
+}
+
 static void CompositeMattedCanvas(const std::vector<unsigned int>& scratch, const std::vector<BYTE>& coverage,
                                   SubPicDesc& spd, const CRect& bbox)
 {
@@ -1784,7 +1825,7 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
         CWord* w = GetNext(pos);
         if(w->m_fLineBreak) return(bbox); // should not happen since this class is just a line of text without any breaks
 
-        if(w->m_style.shadowDepthX != 0 || w->m_style.shadowDepthY != 0)
+        if(w->m_style.shadowDepthX != 0 || w->m_style.shadowDepthY != 0 || w->m_style.mod_extrudeDepth != 0)
         {
             int x = p.x + (int)(w->m_style.shadowDepthX + 0.5);
 #ifdef _VSMOD // patch m001. Vertical fontspacing
@@ -1816,7 +1857,40 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
             w->Paint(CPoint(x, y), org);
 #endif
 
-            if(w->m_style.borderStyle == 0)
+#ifdef _VSMOD // patch m019. extrude
+            /* \extrude(depth[,angle]): shadow-colour copies at 1px steps along
+             * the extrusion direction, far-to-near, forming the solid side of
+             * a 3D extrusion. Copies reuse the rasterized word -- pure Draw
+             * re-entry, no re-transform. */
+            if(w->m_style.mod_extrudeDepth != 0)
+            {
+                const double erad = w->m_style.mod_extrudeAngle * (3.14159265358979323846 / 180.0);
+                const double ecx = vsfm::DetCos(erad) * 8.0, ecy = vsfm::DetSin(erad) * 8.0;
+                const int depth = (int)(w->m_style.mod_extrudeDepth + 0.5);
+                const int bx = x - (int)(w->m_style.shadowDepthX + 0.5);
+                const int by = y - (int)(w->m_style.shadowDepthY + 0.5);
+                for(int ei = depth; ei >= 1; ei--)
+                {
+                    const int ex = bx + (int)floor(ecx * ei + 0.5);
+                    const int ey = by + (int)floor(ecy * ei + 0.5);
+                    if(w->m_style.borderStyle == 0)
+                    {
+                        bbox |= w->Draw(spd, clipRect, pAlphaMask, ex, ey, sw,
+                                        w->m_ktype > 0 || w->m_style.alpha[0] < 0xff,
+                                        (w->m_style.outlineWidthX + w->m_style.outlineWidthY > 0) && !(w->m_ktype == 2 && time < w->m_kstart), 3, w->m_style.mod_grad, mod_vc);
+                    }
+                    else if(w->m_style.borderStyle == 1 && w->m_pOpaqueBox)
+                    {
+                        bbox |= w->m_pOpaqueBox->Draw(spd, clipRect, pAlphaMask, ex, ey, sw, true, false, 3, w->m_style.mod_grad, mod_vc);
+                    }
+                }
+            }
+#endif
+            /* With zero shadow depth the pass only runs for the extrusion
+             * copies: painting the shadow-colour copy at the exact body
+             * position would spuriously tint antialiased edges all round. */
+            const bool hasShadowOffset = (w->m_style.shadowDepthX != 0 || w->m_style.shadowDepthY != 0);
+            if(hasShadowOffset && w->m_style.borderStyle == 0)
             {
 #ifdef _VSMOD // patch m004. gradient colors
                 bbox |= w->Draw(spd, clipRect, pAlphaMask, x, y, sw,
@@ -1828,7 +1902,7 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
                                 (w->m_style.outlineWidthX + w->m_style.outlineWidthY > 0) && !(w->m_ktype == 2 && time < w->m_kstart));
 #endif
             }
-            else if(w->m_style.borderStyle == 1 && w->m_pOpaqueBox)
+            else if(hasShadowOffset && w->m_style.borderStyle == 1 && w->m_pOpaqueBox)
             {
 #ifdef _VSMOD // patch m004. gradient colors
                 bbox |= w->m_pOpaqueBox->Draw(spd, clipRect, pAlphaMask, x, y, sw, true, false, 3, w->m_style.mod_grad, mod_vc);
@@ -2079,6 +2153,10 @@ CSubtitle::CSubtitle()
     m_clipExplicit = false;
 #endif
 #ifdef _VSMOD // patch m016. track matte
+    m_echoCount = 0;
+    m_echoDx = 2;
+    m_echoDy = 0;
+    m_echoFalloff = 0.5;
     m_matteMode = 0;
     m_matteOffset = 1;
 #endif
@@ -2812,6 +2890,34 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             params.Add(cmd.Mid(5).Trim(L"&H")), cmd = cmd.Left(5);
         else if(!cmd.Find(L"an"))
             params.Add(cmd.Mid(2)), cmd = cmd.Left(2);
+#ifdef _VSMOD // patch m020. echo
+        else if(!cmd.Find(L"echo"))
+        {
+            if(cmd.GetLength() > 4)
+            {
+                const WCHAR suffixStart = cmd[4];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(4));
+                    cmd = cmd.Left(4);
+                }
+            }
+        }
+#endif
+#ifdef _VSMOD // patch m019. extrude
+        else if(!cmd.Find(L"extrude"))
+        {
+            if(cmd.GetLength() > 7)
+            {
+                const WCHAR suffixStart = cmd[7];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(7));
+                    cmd = cmd.Left(7);
+                }
+            }
+        }
+#endif
 #ifdef _VSMOD // patch m018. wave text
         else if(!cmd.Find(L"wave"))
         {
@@ -3831,6 +3937,74 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             }
         }
 #endif
+#ifdef _VSMOD // patch m020. echo
+        /* \echo(count,dx,dy[,falloff]): motion-trail copies of the whole event.
+         * dx/dy are per-copy offsets in output pixels, falloff the per-step
+         * alpha multiplier (default 0.5). \echo0 disables. Event-level: the
+         * parameters of the last override block win for the whole line. */
+        else if(cmd == L"echo")
+        {
+            if(params.GetCount() > 0)
+            {
+                const double count = vsfm::WcsToD(params[0], NULL);
+                const double dx = params.GetCount() > 1 ? vsfm::WcsToD(params[1], NULL) : 2.0;
+                const double dy = params.GetCount() > 2 ? vsfm::WcsToD(params[2], NULL) : 0.0;
+                const double falloff = params.GetCount() > 3 ? vsfm::WcsToD(params[3], NULL) : 0.5;
+                double nc = CalcAnimation(count, style.mod_echoCount, fAnimate);
+                const double ndx = CalcAnimation(dx, style.mod_echoDx, fAnimate);
+                const double ndy = CalcAnimation(dy, style.mod_echoDy, fAnimate);
+                const double nf = CalcAnimation(falloff, style.mod_echoFalloff, fAnimate);
+                nc = !(nc > 0) ? 0 : nc > 32 ? 32 : nc;
+                style.mod_echoCount = nc;
+                style.mod_echoDx = ndx > 4096 ? 4096 : ndx < -4096 ? -4096 : ndx;
+                style.mod_echoDy = ndy > 4096 ? 4096 : ndy < -4096 ? -4096 : ndy;
+                style.mod_echoFalloff = !(nf > 0) ? 0.0 : nf > 1 ? 1 : nf;
+                if(sub)
+                {
+                    sub->m_echoCount = (int)(nc + 0.5);
+                    sub->m_echoDx = style.mod_echoDx;
+                    sub->m_echoDy = style.mod_echoDy;
+                    sub->m_echoFalloff = style.mod_echoFalloff;
+                }
+            }
+            else
+            {
+                style.mod_echoCount = org.mod_echoCount;
+                style.mod_echoDx = org.mod_echoDx;
+                style.mod_echoDy = org.mod_echoDy;
+                style.mod_echoFalloff = org.mod_echoFalloff;
+                if(sub)
+                {
+                    sub->m_echoCount = (int)(org.mod_echoCount + 0.5);
+                    sub->m_echoDx = org.mod_echoDx;
+                    sub->m_echoDy = org.mod_echoDy;
+                    sub->m_echoFalloff = org.mod_echoFalloff;
+                }
+            }
+        }
+#endif
+#ifdef _VSMOD // patch m019. extrude
+        /* \extrude(depth[,angle]): 3D extrusion -- depth output pixels of
+         * shadow-colour copies at 1px steps along angle (degrees, screen
+         * coords: 0 = right, 90 = down). \extrude0 disables. */
+        else if(cmd == L"extrude")
+        {
+            if(params.GetCount() > 0)
+            {
+                const double depth = vsfm::WcsToD(params[0], NULL);
+                const double angle = params.GetCount() > 1 ? vsfm::WcsToD(params[1], NULL) : 45.0;
+                double nd = CalcAnimation(depth, style.mod_extrudeDepth, fAnimate);
+                const double na = CalcAnimation(angle, style.mod_extrudeAngle, fAnimate);
+                style.mod_extrudeDepth = !(nd > 0) ? 0 : nd > 256 ? 256 : nd;
+                style.mod_extrudeAngle = na;
+            }
+            else
+            {
+                style.mod_extrudeDepth = org.mod_extrudeDepth;
+                style.mod_extrudeAngle = org.mod_extrudeAngle;
+            }
+        }
+#endif
 #ifdef _VSMOD // patch m018. wave text
         /* \wave(amp,freq[,phase]): sine-wave baseline. amp in output pixels
          * (sign picks the initial direction), freq the wavelength in output
@@ -4810,7 +4984,7 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
                     break; /* highest matte layer below wins */
                 }
             }
-            if(consumeMatte)
+            if(consumeMatte || s->m_echoCount > 0)
             {
                 evtPixels.assign((size_t)spd.w * spd.h, 0xff000000);
                 tspd.bits = (BYTE*)evtPixels.data();
@@ -5646,6 +5820,40 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
             if(clipped.right > spd.w) clipped.right = spd.w;
             if(clipped.bottom > spd.h) clipped.bottom = spd.h;
             bbox2 |= clipped;
+        }
+        else if(s->m_echoCount > 0 && !evtPixels.empty())
+        {
+            /* far-to-near copies, then the main copy at full alpha. Powers by
+             * repeated multiplication: exact and platform-independent. */
+            double powers[33];
+            powers[0] = 1.0;
+            for(int k = 1; k <= s->m_echoCount && k <= 32; k++)
+                powers[k] = powers[k - 1] * s->m_echoFalloff;
+            CRect acc(0, 0, 0, 0);
+            bool accset = false;
+            for(int ei = s->m_echoCount; ei >= 0; ei--)
+            {
+                const int scale256 = ei == 0 ? 256 : (int)(powers[ei] * 256.0 + 0.5);
+                const int cdx = (int)(s->m_echoDx * ei + (s->m_echoDx * ei >= 0 ? 0.5 : -0.5));
+                const int cdy = (int)(s->m_echoDy * ei + (s->m_echoDy * ei >= 0 ? 0.5 : -0.5));
+                if(scale256 > 0)
+                {
+                    CompositeEchoCanvas(evtPixels, spd, cdx, cdy, scale256, localBBox);
+                    CRect clipped(localBBox);
+                    clipped.left += cdx; clipped.right += cdx;
+                    clipped.top += cdy; clipped.bottom += cdy;
+                    if(clipped.left < 0) clipped.left = 0;
+                    if(clipped.top < 0) clipped.top = 0;
+                    if(clipped.right > spd.w) clipped.right = spd.w;
+                    if(clipped.bottom > spd.h) clipped.bottom = spd.h;
+                    if(!clipped.IsRectEmpty())
+                    {
+                        acc = accset ? (acc | clipped) : clipped;
+                        accset = true;
+                    }
+                }
+            }
+            if(accset) bbox2 |= acc;
         }
 #endif
 

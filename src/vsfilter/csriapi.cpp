@@ -533,6 +533,16 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "help": "波浪文字；字形沿正弦基线排布并随切线旋转，amp/freq 输出像素、phase 度数，\\wave0 关闭"
     },
     {
+      "name": "extrude",
+      "signature": "\\extrude(depth[,angle])",
+      "help": "立体挤出；阴影色副本沿方向逐像素层叠，\\extrude0 关闭"
+    },
+    {
+      "name": "echo",
+      "signature": "\\echo(count,dx,dy[,falloff])",
+      "help": "残影拖尾；事件按步进偏移逐副本合成并逐层衰减，\\echo0 关闭"
+    },
+    {
       "name": "clipf",
       "signature": "\\clipf(radius)",
       "help": "羽化裁剪；\\clipf15 柔化矩形/矢量裁剪边缘"

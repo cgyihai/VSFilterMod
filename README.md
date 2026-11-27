@@ -241,6 +241,22 @@ Dialogue: 2,...,{\pos(320,180)\1vc(...)\rgrad1}WWWWW  gradient shows inside TEXT
 The regression suite tests/matte.py pins containment, inversion, layer
 offsets, hiding and the syntax variants.
 
+### `\extrude(depth[,angle])` — 3D extrusion
+
+Paints shadow-colour copies of each glyph at 1px steps along the
+extrusion direction (default 45 degrees in screen coordinates),
+forming solid side faces. Colour/alpha follow the shadow style
+(`\4c`/`\4a`); works with zero shadow depth. `\extrude0` disables;
+`\t` animates depth and angle.
+
+### `\echo(count,dx,dy[,falloff])` — motion trail
+
+Composites the fully rendered event at stepped integer offsets,
+alpha scaled by `falloff` per copy (default 0.5), behind the main
+copy. Every effect is captured exactly (glow, gradients, blur).
+`count` caps at 32. `\echo0` disables; `\t` animates all
+parameters. Event-level: the last override block wins for the line.
+
 ### RGB split (\rgb)
 
 The \rgb tag shifts the red and blue channels of the text in opposite

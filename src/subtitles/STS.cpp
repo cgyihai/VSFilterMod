@@ -3333,6 +3333,12 @@ void STSStyle::SetDefault()
     mod_waveAmp = 0;
     mod_waveFreq = 200;
     mod_wavePhase = 0;
+    mod_extrudeDepth = 0;
+    mod_extrudeAngle = 45;
+    mod_echoCount = 0;
+    mod_echoDx = 2;
+    mod_echoDy = 0;
+    mod_echoFalloff = 0.5;
 #endif
 }
 
@@ -3393,6 +3399,12 @@ bool STSStyle::operator == (STSStyle& s)
            && mod_waveAmp == s.mod_waveAmp
            && mod_waveFreq == s.mod_waveFreq
            && mod_wavePhase == s.mod_wavePhase
+           && mod_extrudeDepth == s.mod_extrudeDepth
+           && mod_extrudeAngle == s.mod_extrudeAngle
+           && mod_echoCount == s.mod_echoCount
+           && mod_echoDx == s.mod_echoDx
+           && mod_echoDy == s.mod_echoDy
+           && mod_echoFalloff == s.mod_echoFalloff
 #endif
            && IsFontStyleEqual(s));
 }
@@ -3476,6 +3488,12 @@ void STSStyle::mod_CopyStyleFrom(const STSStyle& s)
     mod_waveAmp = s.mod_waveAmp;
     mod_waveFreq = s.mod_waveFreq;
     mod_wavePhase = s.mod_wavePhase;
+    mod_extrudeDepth = s.mod_extrudeDepth;
+    mod_extrudeAngle = s.mod_extrudeAngle;
+    mod_echoCount = s.mod_echoCount;
+    mod_echoDx = s.mod_echoDx;
+    mod_echoDy = s.mod_echoDy;
+    mod_echoFalloff = s.mod_echoFalloff;
     // font
     charSet = s.charSet;
     fontName = s.fontName;

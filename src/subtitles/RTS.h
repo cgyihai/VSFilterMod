@@ -236,6 +236,8 @@ public:
      * A matte event renders into a per-layer offscreen canvas instead of the
      * frame; its opacity silhouette is captured as the matte coverage for
      * events on layer (matte layer + m_matteOffset). */
+    int m_echoCount;
+    double m_echoDx, m_echoDy, m_echoFalloff;
     int m_matteMode;
     int m_matteOffset;
 #endif
