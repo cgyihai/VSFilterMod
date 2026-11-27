@@ -230,6 +230,9 @@ public:
     double mod_bevelStrength;
     double mod_arcRadius;
     double mod_arcAngle;
+    double mod_waveAmp;
+    double mod_waveFreq;
+    double mod_wavePhase;
 #endif
 
     STSStyle();

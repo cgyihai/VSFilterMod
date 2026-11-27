@@ -3330,6 +3330,9 @@ void STSStyle::SetDefault()
     // patch m017. arc text
     mod_arcRadius = 0;
     mod_arcAngle = 0;
+    mod_waveAmp = 0;
+    mod_waveFreq = 200;
+    mod_wavePhase = 0;
 #endif
 }
 
@@ -3387,6 +3390,9 @@ bool STSStyle::operator == (STSStyle& s)
            && mod_bevelStrength == s.mod_bevelStrength
            && mod_arcRadius == s.mod_arcRadius
            && mod_arcAngle == s.mod_arcAngle
+           && mod_waveAmp == s.mod_waveAmp
+           && mod_waveFreq == s.mod_waveFreq
+           && mod_wavePhase == s.mod_wavePhase
 #endif
            && IsFontStyleEqual(s));
 }
@@ -3467,6 +3473,9 @@ void STSStyle::mod_CopyStyleFrom(const STSStyle& s)
     mod_bevelStrength = s.mod_bevelStrength;
     mod_arcRadius = s.mod_arcRadius;
     mod_arcAngle = s.mod_arcAngle;
+    mod_waveAmp = s.mod_waveAmp;
+    mod_waveFreq = s.mod_waveFreq;
+    mod_wavePhase = s.mod_wavePhase;
     // font
     charSet = s.charSet;
     fontName = s.fontName;

@@ -72,6 +72,7 @@ public:
      * the rasterized path is cached, so the mutation must happen exactly
      * once per word object. */
     bool m_arcApplied;
+    bool m_waveApplied;
 #endif
 
     int m_ktype, m_kstart, m_kend;

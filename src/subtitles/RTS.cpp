@@ -945,6 +945,7 @@ CWord::CWord(const STSStyle& style, CStringW str, int ktype, int kstart, int ken
     , m_pOpaqueBox(NULL), isOpaqueBox(false)
 #ifdef _VSMOD
     , m_arcApplied(false)
+    , m_waveApplied(false)
 #endif
 {
     if(str.IsEmpty())
@@ -973,7 +974,7 @@ bool CWord::Append(CWord* w)
     /* Arc layout assigns each glyph its own rotation from its horizontal
      * position, so single-character words must never be compacted back into
      * a run. */
-    if(m_style.mod_arcRadius != 0) return(false);
+    if(m_style.mod_arcRadius != 0 || m_style.mod_waveAmp != 0) return(false);
 #endif
 
     m_fWhiteSpaceChar = m_fWhiteSpaceChar && w->m_fWhiteSpaceChar;
@@ -1735,6 +1736,34 @@ static inline void ApplyArcToWord(CWord* w, int x0, int ybase, int lineWidth,
     org.x = (int)floor(mx + dx + 0.5);
     org.y = (int)floor(ybase + dy + 0.5);
 }
+
+/* \wave(amp,freq[,phase]): displace each glyph vertically on a sine wave
+ * running along the line advance direction. amp/freq are output pixels;
+ * freq is the full wavelength. The glyph rotates to the wave tangent,
+ * pivoting on its displaced baseline midpoint -- same discipline as arc.
+ * Line-relative phase reference: the wave shape is intrinsic to the text
+ * and does not depend on screen position. */
+static inline void ApplyWaveToWord(CWord* w, int x0, int penx, int& x, int& y, CPoint& org)
+{
+    const double amp = w->m_style.mod_waveAmp;
+    const double freq = w->m_style.mod_waveFreq;
+    if(amp == 0 || freq == 0) return;
+    const double amp8 = amp * 8.0;
+    const double freq8 = freq * 8.0;
+    const double mx = penx + w->m_width / 2.0;
+    const double theta = (mx - x0) / freq8 * (2.0 * 3.14159265358979323846)
+                         + w->m_style.mod_wavePhase * (3.14159265358979323846 / 180.0);
+    const double dy = amp8 * vsfm::DetSin(theta);
+    const double slope = amp * vsfm::DetCos(theta) * (2.0 * 3.14159265358979323846) / freq;
+    if(!w->m_waveApplied)
+    {
+        w->m_style.fontAngleZ += atan(slope) * (180.0 / 3.14159265358979323846);
+        w->m_waveApplied = true;
+    }
+    const int idy = (int)floor(dy + 0.5);
+    y += idy;
+    org.y += idy;
+}
 #endif
 
 CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt)
@@ -1781,6 +1810,7 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
 #ifdef _VSMOD // patch m017. arc text
             CPoint worg = org;
             ApplyArcToWord(w, arcX0, arcYBase, m_width, p.x, x, y, worg);
+            ApplyWaveToWord(w, arcX0, p.x, x, y, worg);
             w->Paint(CPoint(x, y), worg);
 #else
             w->Paint(CPoint(x, y), org);
@@ -1875,6 +1905,7 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
 #ifdef _VSMOD // patch m017. arc text
             CPoint worg = org;
             ApplyArcToWord(w, arcX0, arcYBase, m_width, p.x, x, y, worg);
+            ApplyWaveToWord(w, arcX0, p.x, x, y, worg);
             w->Paint(CPoint(x, y), worg);
 #else
             w->Paint(CPoint(x, y), org);
@@ -2016,6 +2047,7 @@ CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoin
         #ifdef _VSMOD // patch m017. arc text
         CPoint worg = org;
         ApplyArcToWord(w, arcX0, arcYBase, m_width, p.x, x, y, worg);
+            ApplyWaveToWord(w, arcX0, p.x, x, y, worg);
         w->Paint(CPoint(x, y), worg);
         #else
         w->Paint(CPoint(x, y), org);
@@ -2630,7 +2662,7 @@ void CRenderedTextSubtitle::ParseString(CSubtitle* sub, CStringW str, STSStyle& 
             /* Arc layout rotates each glyph independently, which only makes
              * sense for single-character words: split the run. Kerning and
              * ligatures are lost (documented); CJK text is unaffected. */
-            if(style.mod_arcRadius != 0)
+            if(style.mod_arcRadius != 0 || style.mod_waveAmp != 0)
             {
                 for(int k = i; k < j; k++)
                 {
@@ -2780,6 +2812,20 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             params.Add(cmd.Mid(5).Trim(L"&H")), cmd = cmd.Left(5);
         else if(!cmd.Find(L"an"))
             params.Add(cmd.Mid(2)), cmd = cmd.Left(2);
+#ifdef _VSMOD // patch m018. wave text
+        else if(!cmd.Find(L"wave"))
+        {
+            if(cmd.GetLength() > 4)
+            {
+                const WCHAR suffixStart = cmd[4];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(4));
+                    cmd = cmd.Left(4);
+                }
+            }
+        }
+#endif
 #ifdef _VSMOD // patch m017. arc text: must precede the a prefix branch
         else if(!cmd.Find(L"arc"))
         {
@@ -3782,6 +3828,35 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             {
                 style.mod_arcRadius = org.mod_arcRadius;
                 style.mod_arcAngle = org.mod_arcAngle;
+            }
+        }
+#endif
+#ifdef _VSMOD // patch m018. wave text
+        /* \wave(amp,freq[,phase]): sine-wave baseline. amp in output pixels
+         * (sign picks the initial direction), freq the wavelength in output
+         * pixels, phase in degrees. \wave0 disables. */
+        else if(cmd == L"wave")
+        {
+            if(params.GetCount() > 0)
+            {
+                const double amp = vsfm::WcsToD(params[0], NULL);
+                const double freq = params.GetCount() > 1 ? vsfm::WcsToD(params[1], NULL) : 200.0;
+                const double phase = params.GetCount() > 2 ? vsfm::WcsToD(params[2], NULL) : 0.0;
+                double na = CalcAnimation(amp, style.mod_waveAmp, fAnimate);
+                const double nf = CalcAnimation(freq, style.mod_waveFreq, fAnimate);
+                const double np = CalcAnimation(phase, style.mod_wavePhase, fAnimate);
+                if(!(na > 0) && !(na < 0)) na = 0;
+                else if(na > 1024) na = 1024;
+                else if(na < -1024) na = -1024;
+                style.mod_waveAmp = na;
+                style.mod_waveFreq = !(nf > 1) ? 1 : nf > 65536 ? 65536 : nf;
+                style.mod_wavePhase = np;
+            }
+            else
+            {
+                style.mod_waveAmp = org.mod_waveAmp;
+                style.mod_waveFreq = org.mod_waveFreq;
+                style.mod_wavePhase = org.mod_wavePhase;
             }
         }
 #endif

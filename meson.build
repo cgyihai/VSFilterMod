@@ -372,6 +372,12 @@ if get_option('tests')
                          meson.current_build_dir() / 'arc-test'],
                  depends : [vsfmrender],
                  timeout : 120)
+            test('wave', py,
+                 args : [files('tests/wave.py'),
+                         vsfmrender.full_path(),
+                         meson.current_build_dir() / 'wave-test'],
+                 depends : [vsfmrender],
+                 timeout : 120)
         endif
     endif
 
