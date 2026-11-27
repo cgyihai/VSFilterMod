@@ -124,6 +124,17 @@
 - The VFR timecode reader parsed the fps column with the C locale's `%f`:
   on systems whose locale uses a comma decimal separator the values misread
   and frame timing drifted. Parsing is locale-independent now.
+- `\wave(amp,freq[,phase])`: displaces each glyph vertically on a sine
+  wave running along the line advance direction and rotates it to the
+  wave tangent, pivoting on the displaced baseline midpoint. `amp` and
+  `freq` are output pixels (`freq` is the full wavelength), `phase` is
+  in degrees; `\wave0` disables the effect and `\t` animation is
+  supported on all three parameters. Text is split per character like
+  the arc layout (same ligature caveat; CJK unaffected), UTF-16
+  surrogate pairs are kept whole, and the wave shape is intrinsic to
+  the line: it does not depend on screen position. TypeSub tag
+  metadata includes the new tag.
+
 - `csri_open_file`/`csri_open_mem` share one instance-setup path; remaining
   POSIX portability and build documentation work.
 

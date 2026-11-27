@@ -528,6 +528,11 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "help": "弧形文字；文字沿以圆心为 \\pos 的圆周排列，\\arc0 关闭"
     },
     {
+      "name": "wave",
+      "signature": "\\wave(amp,freq[,phase])",
+      "help": "波浪文字；字形沿正弦基线排布并随切线旋转，amp/freq 输出像素、phase 度数，\\wave0 关闭"
+    },
+    {
       "name": "clipf",
       "signature": "\\clipf(radius)",
       "help": "羽化裁剪；\\clipf15 柔化矩形/矢量裁剪边缘"

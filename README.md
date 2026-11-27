@@ -205,6 +205,17 @@ supported and `\arc0` disables the effect. Text is laid out per character,
 so Latin ligatures/kerning are lost (CJK unaffected); `\fsp` spacing still
 applies along the arc.
 
+### `\wave(amp,freq[,phase])` — sine-wave text
+
+Lays the line baseline onto a sine wave: each glyph is displaced
+vertically by `amp*sin` of its advance position and rotated to the
+wave tangent. `amp` and `freq` are output pixels (`freq` is the full
+wavelength), `phase` is in degrees. `\wave0` disables the effect;
+`\t` can animate all three parameters (animating `phase` makes the
+wave flow). Text is split into single characters like `\arc`
+(Latin ligatures are lost, CJK unaffected). Combines with `\arc`
+and all bitmap effects.
+
 ### Track mattes (\matte, \imatte)
 
 A track matte uses one event's silhouette to mask events on a layer above it,
