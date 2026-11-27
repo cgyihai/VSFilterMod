@@ -247,6 +247,9 @@ public:
     double mod_echoDx;
     double mod_echoDy;
     double mod_echoFalloff;
+    // patch m024. true perspective: camera distance in output pixels
+    // for the frx/fry projection; 0 keeps the legacy weak projection.
+    double mod_perspDist;
     // patch m023. per-layer blur: additional gaussian radius for the
     // shadow / outline passes, same units as \blur. The word overlay is
     // re-rasterized per pass with the pass-specific total blur.

@@ -1197,8 +1197,22 @@ void CWord::Transform(CPoint org)
     const float yshift = (float)m_style.fontShiftY;
     const float xorg = (float)org.x;
     const float yorg = (float)org.y;
-    const float xzoomf = (float)(m_scalex * 20000.0);
-    const float yzoomf = (float)(m_scaley * 20000.0);
+    float xzoomf = (float)(m_scalex * 20000.0);
+    float yzoomf = (float)(m_scaley * 20000.0);
+#ifdef _VSMOD // patch m024. true perspective
+    /* \persp(dist): user camera distance in output pixels. The projection
+     * denominators below work in eighth-pixel units scaled by m_scale*,
+     * which the legacy m_scale* * 20000 matches at distance 2500 eighths
+     * (312 output px at scale 1/8); hence dist * 64 * m_scale*. When the
+     * text crosses the camera plane the MaxSs clamp below bounds the
+     * projection instead of inverting it, so distances smaller than half
+     * the line width produce compressed artefacts rather than flips. */
+    if(m_style.mod_perspDist > 0)
+    {
+        xzoomf = (float)(m_style.mod_perspDist * 64.0 * m_scalex);
+        yzoomf = (float)(m_style.mod_perspDist * 64.0 * m_scaley);
+    }
+#endif
 
 #ifdef _VSMOD
     const double xrnd = m_style.mod_rand.X * 100;
@@ -3076,6 +3090,20 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             }
         }
 #endif
+#ifdef _VSMOD // patch m024. true perspective: must precede the p prefix branch
+        else if(!cmd.Find(L"persp"))
+        {
+            if(cmd.GetLength() > 5)
+            {
+                const WCHAR suffixStart = cmd[5];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(5));
+                    cmd = cmd.Left(5);
+                }
+            }
+        }
+#endif
 #ifdef _VSMOD // patch m021. corner pin: must precede the p prefix branch
         else if(!cmd.Find(L"pin"))
         {
@@ -4193,6 +4221,20 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                 style.mod_arcRadius = org.mod_arcRadius;
                 style.mod_arcAngle = org.mod_arcAngle;
             }
+        }
+#endif
+#ifdef _VSMOD // patch m024. true perspective
+        /* \persp(dist): camera distance in output pixels for the frx/fry
+         * projection. The legacy projection uses a fixed weak distance
+         * (about 312 output px at scale 1); smaller distances give strong
+         * foreshortening for dramatic rotations. \persp0 restores the
+         * legacy projection. */
+        else if(cmd == L"persp")
+        {
+            double n = CalcAnimation(vsfm::WcsToD(p, NULL), style.mod_perspDist, fAnimate);
+            style.mod_perspDist = !p.IsEmpty()
+                                  ? (n < 0 ? 0 : n > 100000 ? 100000 : n)
+                                      : org.mod_perspDist;
         }
 #endif
 #ifdef _VSMOD // patch m021. corner pin

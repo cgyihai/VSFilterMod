@@ -3339,6 +3339,7 @@ void STSStyle::SetDefault()
     mod_echoDx = 2;
     mod_echoDy = 0;
     mod_echoFalloff = 0.5;
+    mod_perspDist = 0;
     mod_shadBlur = 0;
     mod_bordBlur = 0;
     mod_pinEnabled = false;
@@ -3410,6 +3411,7 @@ bool STSStyle::operator == (STSStyle& s)
            && mod_echoDx == s.mod_echoDx
            && mod_echoDy == s.mod_echoDy
            && mod_echoFalloff == s.mod_echoFalloff
+           && mod_perspDist == s.mod_perspDist
            && mod_shadBlur == s.mod_shadBlur
            && mod_bordBlur == s.mod_bordBlur
            && mod_pinEnabled == s.mod_pinEnabled
@@ -3506,6 +3508,7 @@ void STSStyle::mod_CopyStyleFrom(const STSStyle& s)
     mod_echoDx = s.mod_echoDx;
     mod_echoDy = s.mod_echoDy;
     mod_echoFalloff = s.mod_echoFalloff;
+    mod_perspDist = s.mod_perspDist;
     mod_shadBlur = s.mod_shadBlur;
     mod_bordBlur = s.mod_bordBlur;
     mod_pinEnabled = s.mod_pinEnabled;

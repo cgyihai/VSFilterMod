@@ -533,6 +533,11 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "help": "多色渐变；2-8 个 ASS 十六进制色标沿 vgrad 角度或 rgrad 径向均布，未设置时水平，\\mgrad0 关闭"
     },
     {
+      "name": "persp",
+      "signature": "\\persp(dist)",
+      "help": "真透视相机距离（输出像素）；frx/fry 旋转的投影距离，小距离强透视缩短，\\persp0 恢复默认"
+    },
+    {
       "name": "shadblur",
       "signature": "\\shadblur(radius)",
       "help": "阴影独立羽化；与 \\blur 加算，仅作用阴影层，\\shadblur0 关闭"

@@ -1,5 +1,5 @@
 project('vsfiltermod', 'c', 'cpp',
-    version : '1.15.0',
+    version : '1.16.0',
     license : 'GPL-2.0-or-later',
     meson_version : '>=0.59.0',
     default_options : [
@@ -406,6 +406,12 @@ if get_option('tests')
                  args : [files('tests/lblur.py'),
                          vsfmrender.full_path(),
                          meson.current_build_dir() / 'lblur-test'],
+                 depends : [vsfmrender],
+                 timeout : 120)
+            test('persp', py,
+                 args : [files('tests/persp.py'),
+                         vsfmrender.full_path(),
+                         meson.current_build_dir() / 'persp-test'],
                  depends : [vsfmrender],
                  timeout : 120)
         endif

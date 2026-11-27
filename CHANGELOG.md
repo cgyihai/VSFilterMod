@@ -189,6 +189,17 @@
   animation, and zero disables the extra blur. TypeSub tag metadata
   includes the new tags.
 
+- `\persp(dist)`: true-perspective camera distance for the
+  `\frx`/`\fry` rotations, in output pixels. The legacy projection
+  uses a fixed weak distance (about 312 px at unit scale); smaller
+  distances produce dramatic foreshortening -- near-end expansion
+  and far-end compression -- while large distances approach the
+  orthogonal limit. The projected line width follows the
+  homographic width law cos(t) d^2 / (d^2 - (W/2 sin(t))^2), which
+  the regression test validates analytically. `\persp0` restores
+  the legacy projection, `\t` animation is supported. TypeSub tag
+  metadata includes the new tag.
+
 - `csri_open_file`/`csri_open_mem` share one instance-setup path; remaining
   POSIX portability and build documentation work.
 

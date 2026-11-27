@@ -257,6 +257,14 @@ copy. Every effect is captured exactly (glow, gradients, blur).
 `count` caps at 32. `\echo0` disables; `\t` animates all
 parameters. Event-level: the last override block wins for the line.
 
+### `\persp(dist)` — true-perspective camera distance
+
+Camera distance in output pixels for the `\frx`/`\fry` 3D
+rotations. Small distances give dramatic foreshortening (near end
+expands, far end compresses); large distances approach the
+orthogonal look of legacy ASS. `\persp0` restores the legacy
+projection; `\t` animates.
+
 ### `\shadblur(radius)` / `\bordblur(radius)` — per-layer blur
 
 Gaussian blur applied to one layer only: the shadow / outline pass
