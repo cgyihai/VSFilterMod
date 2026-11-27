@@ -528,6 +528,11 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "help": "弧形文字；文字沿以圆心为 \\pos 的圆周排列，\\arc0 关闭"
     },
     {
+      "name": "pin",
+      "signature": "\\pin(x1,y1,x2,y2,x3,y3,x4,y4)",
+      "help": "四角钉扎透视；行布局盒四角（自左上顺时针）映射到输出像素四角点，\\pin0 关闭"
+    },
+    {
       "name": "wave",
       "signature": "\\wave(amp,freq[,phase])",
       "help": "波浪文字；字形沿正弦基线排布并随切线旋转，amp/freq 输出像素、phase 度数，\\wave0 关闭"

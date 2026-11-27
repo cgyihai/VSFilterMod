@@ -257,6 +257,18 @@ copy. Every effect is captured exactly (glow, gradients, blur).
 `count` caps at 32. `\echo0` disables; `\t` animates all
 parameters. Event-level: the last override block wins for the line.
 
+### `\pin(x1,y1,x2,y2,x3,y3,x4,y4)` — corner-pin perspective
+
+Projective (homography) warp that fits the line onto any four-point
+quad: the corners of the line layout box, clockwise from top-left,
+map onto the four given output-pixel corner points. Text can be
+pinned onto tilted signboards, screens or book covers with true
+perspective foreshortening. The warp applies on top of all other
+transforms (rotation, arc, wave compose underneath). `\pin0`
+disables; `\t` animates all eight coordinates. Unlike legacy
+`\distort` (three-point bilinear, box-relative), `\pin` is true
+perspective in absolute output pixels.
+
 ### RGB split (\rgb)
 
 The \rgb tag shifts the red and blue channels of the text in opposite

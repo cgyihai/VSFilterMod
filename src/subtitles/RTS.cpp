@@ -1028,6 +1028,58 @@ bool CWord::Append(CWord* w)
     return(true);
 }
 
+#ifdef _VSMOD // patch m021. corner pin
+/* Projective map from the unit square to the quad (qx,qy), corners clockwise
+ * from top-left: x=(a u+b v+c)/(g u+h v+1), y=(d u+e v+f)/(g u+h v+1).
+ * Solved as an 8x8 linear system by Gauss-Jordan elimination with partial
+ * pivoting in IEEE double arithmetic; no transcendental functions are
+ * involved, so the result is bit-identical across platforms. Returns false
+ * for degenerate quads. */
+static bool SolvePinHomography(const double qx[4], const double qy[4], double H[8])
+{
+    static const double uu[4] = {0.0, 1.0, 1.0, 0.0};
+    static const double vv[4] = {0.0, 0.0, 1.0, 1.0};
+    double A[8][9];
+    for(int i = 0; i < 4; i++)
+    {
+        const double u = uu[i], v = vv[i];
+        double* r0 = A[i * 2];
+        double* r1 = A[i * 2 + 1];
+        for(int k = 0; k < 9; k++) { r0[k] = 0.0; r1[k] = 0.0; }
+        r0[0] = u; r0[1] = v; r0[2] = 1.0;
+        r0[6] = -u * qx[i]; r0[7] = -v * qx[i];
+        r0[8] = qx[i];
+        r1[3] = u; r1[4] = v; r1[5] = 1.0;
+        r1[6] = -u * qy[i]; r1[7] = -v * qy[i];
+        r1[8] = qy[i];
+    }
+    for(int col = 0; col < 8; col++)
+    {
+        int piv = col;
+        for(int r = col + 1; r < 8; r++)
+            if(fabs(A[r][col]) > fabs(A[piv][col])) piv = r;
+        if(fabs(A[piv][col]) < 1e-12) return false;
+        if(piv != col)
+            for(int k = col; k < 9; k++)
+            {
+                const double t = A[col][k];
+                A[col][k] = A[piv][k];
+                A[piv][k] = t;
+            }
+        for(int r = 0; r < 8; r++)
+        {
+            if(r == col) continue;
+            const double f = A[r][col] / A[col][col];
+            if(f == 0.0) continue;
+            for(int k = col; k < 9; k++)
+                A[r][k] -= f * A[col][k];
+        }
+    }
+    for(int i = 0; i < 8; i++) H[i] = A[i][8] / A[i][i];
+    return true;
+}
+#endif
+
 void CWord::Paint(CPoint p, CPoint org)
 {
     if(!m_str) return;
@@ -1037,6 +1089,50 @@ void CWord::Paint(CPoint p, CPoint org)
         if(!CreatePath()) return;
 
         Transform(CPoint((org.x - p.x) * 8, (org.y - p.y) * 8));
+
+#ifdef _VSMOD // patch m021. corner pin
+        /* Projective corner-pin warp, applied to the fully transformed path
+         * in screen space: a path point q lands at screen position q + p
+         * (eighth-pixel units), so normalise q + p into the line layout
+         * box, push the unit-square coordinates through the homography and
+         * re-relativise against p. Runs once per word inside the m_fDrawn
+         * cache block, so no accumulation guard is needed. */
+        if(m_style.mod_pinEnabled && m_style.mod_pinBbw != 0 && m_style.mod_pinBbh != 0)
+        {
+            /* Path points are in 1/64-pixel units while paint positions and
+             * the line layout box are in 1/8 pixels (the pivot multiplication
+             * in the Transform call above is the same conversion). Everything
+             * is lifted to 64ths here; the pin corners are output pixels. */
+            double qx[4], qy[4], H[8];
+            for(int pi = 0; pi < 4; pi++)
+            {
+                qx[pi] = m_style.mod_pinX[pi] * 64.0;
+                qy[pi] = m_style.mod_pinY[pi] * 64.0;
+            }
+            if(SolvePinHomography(qx, qy, H))
+            {
+                const double px64 = p.x * 8.0;
+                const double py64 = p.y * 8.0;
+                const double bx = m_style.mod_pinBbx * 8.0;
+                const double by = m_style.mod_pinBby * 8.0;
+                const double bw = m_style.mod_pinBbw * 8.0;
+                const double bh = m_style.mod_pinBbh * 8.0;
+                for(size_t i = 0; i < mPathPoints; i++)
+                {
+                    const double sx = mpPathPoints[i].x + px64;
+                    const double sy = mpPathPoints[i].y + py64;
+                    const double u = (sx - bx) / bw;
+                    const double v = (sy - by) / bh;
+                    const double den = H[6] * u + H[7] * v + 1.0;
+                    if(!(fabs(den) > 1e-9)) continue;
+                    const double wx = (H[0] * u + H[1] * v + H[2]) / den;
+                    const double wy = (H[3] * u + H[4] * v + H[5]) / den;
+                    mpPathPoints[i].x = (int)floor(wx - px64 + 0.5);
+                    mpPathPoints[i].y = (int)floor(wy - py64 + 0.5);
+                }
+            }
+        }
+    #endif
 
         if(!ScanConvert()) return;
 
@@ -1852,6 +1948,15 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
             CPoint worg = org;
             ApplyArcToWord(w, arcX0, arcYBase, m_width, p.x, x, y, worg);
             ApplyWaveToWord(w, arcX0, p.x, x, y, worg);
+#ifdef _VSMOD // patch m021. corner pin
+            if(w->m_style.mod_pinEnabled)
+            {
+                w->m_style.mod_pinBbx = p.x;
+                w->m_style.mod_pinBby = p.y;
+                w->m_style.mod_pinBbw = m_width;
+                w->m_style.mod_pinBbh = m_ascent + m_descent;
+            }
+#endif
             w->Paint(CPoint(x, y), worg);
 #else
             w->Paint(CPoint(x, y), org);
@@ -1980,6 +2085,15 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
             CPoint worg = org;
             ApplyArcToWord(w, arcX0, arcYBase, m_width, p.x, x, y, worg);
             ApplyWaveToWord(w, arcX0, p.x, x, y, worg);
+#ifdef _VSMOD // patch m021. corner pin
+            if(w->m_style.mod_pinEnabled)
+            {
+                w->m_style.mod_pinBbx = p.x;
+                w->m_style.mod_pinBby = p.y;
+                w->m_style.mod_pinBbw = m_width;
+                w->m_style.mod_pinBbh = m_ascent + m_descent;
+            }
+#endif
             w->Paint(CPoint(x, y), worg);
 #else
             w->Paint(CPoint(x, y), org);
@@ -2122,6 +2236,15 @@ CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoin
         CPoint worg = org;
         ApplyArcToWord(w, arcX0, arcYBase, m_width, p.x, x, y, worg);
             ApplyWaveToWord(w, arcX0, p.x, x, y, worg);
+#ifdef _VSMOD // patch m021. corner pin
+            if(w->m_style.mod_pinEnabled)
+            {
+                w->m_style.mod_pinBbx = p.x;
+                w->m_style.mod_pinBby = p.y;
+                w->m_style.mod_pinBbw = m_width;
+                w->m_style.mod_pinBbh = m_ascent + m_descent;
+            }
+#endif
         w->Paint(CPoint(x, y), worg);
         #else
         w->Paint(CPoint(x, y), org);
@@ -2928,6 +3051,20 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                 {
                     params.Add(cmd.Mid(4));
                     cmd = cmd.Left(4);
+                }
+            }
+        }
+#endif
+#ifdef _VSMOD // patch m021. corner pin: must precede the p prefix branch
+        else if(!cmd.Find(L"pin"))
+        {
+            if(cmd.GetLength() > 3)
+            {
+                const WCHAR suffixStart = cmd[3];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(3));
+                    cmd = cmd.Left(3);
                 }
             }
         }
@@ -3934,6 +4071,38 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             {
                 style.mod_arcRadius = org.mod_arcRadius;
                 style.mod_arcAngle = org.mod_arcAngle;
+            }
+        }
+#endif
+#ifdef _VSMOD // patch m021. corner pin
+        /* \pin(x1,y1,x2,y2,x3,y3,x4,y4): corner-pin perspective warp. The
+         * corners of the line layout box (clockwise from top-left) are
+         * mapped to the four given output-pixel points through a projective
+         * transform. \pin0 or a single zero parameter disables. */
+        else if(cmd == L"pin")
+        {
+            if(params.GetCount() >= 8)
+            {
+                double nx[4], ny[4];
+                for(int pi = 0; pi < 4; pi++)
+                {
+                    nx[pi] = CalcAnimation(vsfm::WcsToD(params[pi * 2], NULL), style.mod_pinX[pi], fAnimate);
+                    ny[pi] = CalcAnimation(vsfm::WcsToD(params[pi * 2 + 1], NULL), style.mod_pinY[pi], fAnimate);
+                    nx[pi] = nx[pi] > 32767 ? 32767 : nx[pi] < -32767 ? -32767 : nx[pi];
+                    ny[pi] = ny[pi] > 32767 ? 32767 : ny[pi] < -32767 ? -32767 : ny[pi];
+                }
+                for(int pi = 0; pi < 4; pi++) { style.mod_pinX[pi] = nx[pi]; style.mod_pinY[pi] = ny[pi]; }
+                style.mod_pinEnabled = true;
+            }
+            else if(params.GetCount() == 1)
+            {
+                if(vsfm::WcsToD(params[0], NULL) == 0)
+                    style.mod_pinEnabled = false;
+            }
+            else
+            {
+                style.mod_pinEnabled = org.mod_pinEnabled;
+                for(int pi = 0; pi < 4; pi++) { style.mod_pinX[pi] = org.mod_pinX[pi]; style.mod_pinY[pi] = org.mod_pinY[pi]; }
             }
         }
 #endif

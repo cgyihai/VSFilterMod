@@ -239,6 +239,11 @@ public:
     double mod_echoDx;
     double mod_echoDy;
     double mod_echoFalloff;
+    // patch m021. corner pin
+    bool mod_pinEnabled;
+    double mod_pinX[4], mod_pinY[4];
+    // layout box of the owning line in screen eighths, written at paint time
+    double mod_pinBbx, mod_pinBby, mod_pinBbw, mod_pinBbh;
 #endif
 
     STSStyle();

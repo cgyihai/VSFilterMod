@@ -3339,6 +3339,9 @@ void STSStyle::SetDefault()
     mod_echoDx = 2;
     mod_echoDy = 0;
     mod_echoFalloff = 0.5;
+    mod_pinEnabled = false;
+    for(int pi = 0; pi < 4; pi++) { mod_pinX[pi] = 0; mod_pinY[pi] = 0; }
+    mod_pinBbx = mod_pinBby = mod_pinBbw = mod_pinBbh = 0;
 #endif
 }
 
@@ -3405,6 +3408,11 @@ bool STSStyle::operator == (STSStyle& s)
            && mod_echoDx == s.mod_echoDx
            && mod_echoDy == s.mod_echoDy
            && mod_echoFalloff == s.mod_echoFalloff
+           && mod_pinEnabled == s.mod_pinEnabled
+           && mod_pinX[0] == s.mod_pinX[0] && mod_pinX[1] == s.mod_pinX[1]
+           && mod_pinX[2] == s.mod_pinX[2] && mod_pinX[3] == s.mod_pinX[3]
+           && mod_pinY[0] == s.mod_pinY[0] && mod_pinY[1] == s.mod_pinY[1]
+           && mod_pinY[2] == s.mod_pinY[2] && mod_pinY[3] == s.mod_pinY[3]
 #endif
            && IsFontStyleEqual(s));
 }
@@ -3494,6 +3502,8 @@ void STSStyle::mod_CopyStyleFrom(const STSStyle& s)
     mod_echoDx = s.mod_echoDx;
     mod_echoDy = s.mod_echoDy;
     mod_echoFalloff = s.mod_echoFalloff;
+    mod_pinEnabled = s.mod_pinEnabled;
+    for(int pi = 0; pi < 4; pi++) { mod_pinX[pi] = s.mod_pinX[pi]; mod_pinY[pi] = s.mod_pinY[pi]; }
     // font
     charSet = s.charSet;
     fontName = s.fontName;

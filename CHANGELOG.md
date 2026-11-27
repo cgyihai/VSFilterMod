@@ -155,6 +155,23 @@
   both apply to the same event. TypeSub tag metadata includes the
   new tags.
 
+- `\pin(x1,y1,x2,y2,x3,y3,x4,y4)`: corner-pin perspective warping.
+  The four corners of the line layout box (clockwise from top-left)
+  are mapped through a projective transform (homography) onto the
+  four given output-pixel points, so text can be fitted onto
+  arbitrarily tilted rectangular surfaces -- signboards, screens,
+  book covers -- with true perspective foreshortening rather than
+  the orthogonal approximations of `\frx`/`\fry`/`\fax`. The warp
+  applies to the fully transformed glyph paths (rotation, scaling,
+  arc and wave compose underneath), solving an 8x8 linear system
+  per word in IEEE double arithmetic that is bit-identical across
+  platforms. `\pin0` or a single zero parameter disables the effect
+  and `\t` animation is supported on all eight coordinates. Unlike
+  the legacy `\distort` tag (three-point bilinear, bounding-box
+  relative), `\pin` is a true perspective transform in absolute
+  output-pixel coordinates. TypeSub tag metadata includes the new
+  tag.
+
 - `csri_open_file`/`csri_open_mem` share one instance-setup path; remaining
   POSIX portability and build documentation work.
 
