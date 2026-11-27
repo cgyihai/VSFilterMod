@@ -2622,11 +2622,23 @@ void CRenderedTextSubtitle::ParseString(CSubtitle* sub, CStringW str, STSStyle& 
             {
                 for(int k = i; k < j; k++)
                 {
-                    if(CWord* w = DNew CText(style, str.Mid(k, 1), m_ktype, m_kstart, m_kend, sub->m_scalex, sub->m_scaley))
+                    /* Keep UTF-16 surrogate pairs in one word: a non-BMP
+                     * character split at the 16-bit boundary renders as two
+                     * broken glyphs. */
+                    int charLen = 1;
+                    if(k + 1 < j)
+                    {
+                        const unsigned wc = (unsigned)(unsigned short)str[k];
+                        const unsigned wc2 = (unsigned)(unsigned short)str[k + 1];
+                        if(wc >= 0xD800 && wc <= 0xDBFF && wc2 >= 0xDC00 && wc2 <= 0xDFFF)
+                            charLen = 2;
+                    }
+                    if(CWord* w = DNew CText(style, str.Mid(k, charLen), m_ktype, m_kstart, m_kend, sub->m_scalex, sub->m_scaley))
                     {
                         sub->m_words.AddTail(w);
                         m_kstart = m_kend;
                     }
+                    k += charLen - 1;
                 }
             }
             else
