@@ -1304,10 +1304,21 @@ bool CText::CreatePath()
     {
         bool bFirstPath = true;
 
-        for(LPCWSTR s = m_str; *s; s++)
+        for(LPCWSTR s = m_str; *s;)
         {
+            /* Advance whole code points: measuring or drawing a lone surrogate
+             * half renders a broken glyph for non-BMP text. */
+            int charLen = 1;
+            if(s[1])
+            {
+                const unsigned wc = (unsigned)(unsigned short)s[0];
+                const unsigned wc2 = (unsigned)(unsigned short)s[1];
+                if(wc >= 0xD800 && wc <= 0xDBFF && wc2 >= 0xDC00 && wc2 <= 0xDFFF)
+                    charLen = 2;
+            }
+
             CSize extent;
-            if(!font.m_face->TextExtent(s, 1, &extent))
+            if(!font.m_face->TextExtent(s, charLen, &extent))
             {
                 ASSERT(0);
                 return(false);
@@ -1317,11 +1328,12 @@ bool CText::CreatePath()
              * -- the shape of the old PartialBeginPath/TextOutW/PartialEndPath
              * loop, minus the HDC. */
             path.clear();
-            font.m_face->AppendString(s, 1, 0, 0, path);
+            font.m_face->AppendString(s, charLen, 0, 0, path);
             AppendPath(path, width, 0, bFirstPath);
             bFirstPath = false;
 
             width += extent.cx + (int)m_style.fontSpacing;
+            s += charLen;
         }
     }
     else
@@ -3748,11 +3760,10 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             }
         }
 #ifdef _VSMOD // patch m017. arc text
-        /* rc(radius[,angle]): wrap the line baseline onto a circle. The
-         * circle centre hangs radius below the line-centre baseline point
-         * (negative radius puts it above); angle rotates the whole arrangement
-         * around the centre in degrees. Radius sign is meaningful, so the cap
-         * keeps it. */
+        /* \arc(radius[,angle]): wrap the line baseline onto a circle centred
+         * on the line anchor (the \pos point for positioned lines); angle
+         * rotates the arrangement around the centre in degrees. Radius sign is
+         * meaningful, so the cap keeps it. */
         else if(cmd == L"arc")
         {
             if(params.GetCount() > 0)
