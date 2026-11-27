@@ -2,6 +2,35 @@
 
 **English** | [简体中文](CHANGELOG.zh-CN.md)
 
+## Unreleased
+
+### New renderer feature
+
+- Added the \rgb subtitle override tag: chromatic aberration that shifts the
+  red and blue channels of the sentence in opposite directions. \rgb4 and
+  \rgb(4) are equivalent, 	 animation is supported and \rgb0 disables it.
+
+- Added the \glow subtitle override tag. \glow20 and \glow(20) draw a
+  primary-colour halo with a radius of 20 output pixels; \glow(20,1.5) also
+  sets a linear strength multiplier. The effect includes body and outline shapes but
+  not the shadow, follows subtitle alpha/fading and clipping, supports \t
+  animation, and is disabled by \glow0. Radius and strength are capped at 4096
+  output pixels and 64 respectively. The effect is rendered with a bloom-style
+  multi-scale pipeline: Gaussian approximations at three radii are accumulated
+  in 16-bit linear light and compressed with a Reinhard tone curve, so the halo
+  keeps a smooth gradient instead of saturating into a flat cloud; strength
+  acts as exposure before tone mapping. TypeSub tag metadata includes the new tag.
+  The regression suite checks syntax equivalence, strength, colour,
+  transparency, \t animation and rectangular/vector/inverse/moving-vector
+  clipping.
+
+### Upstream alignment
+
+- Carried over upstream's non-blocking unknown-style diagnostic: distinct
+  missing styles are collected into one warning rather than reported by a
+  modal prompt. `vsfmrender` prints the warning and the VapourSynth filter
+  logs it as a warning; rendering is unchanged.
+
 ## 1.4.0
 
 ### CSRI
@@ -9,8 +38,7 @@
 - New: the plugin exports `csri_typesub_tags_json()`, a self-description of
   the extension tags this renderer understands (`\1img`..`\4img`, the
   `\1vc`/`\1va` gradient colors and alphas, `\jitter`, `\distort`,
-  `\mover`/`\moves3`/`\moves4`/`\movevc`, the `
-nd` family, `\z`,
+  `\mover`/`\moves3`/`\moves4`/`\movevc`, the `\rnd` family, `\z`,
   `\frs`, `\fsc`) as a static UTF-8 JSON document. Editors (TypeSub) look
   the symbol up after loading the plugin and merge the table into
   autocompletion, so adding a tag here no longer requires an editor release.

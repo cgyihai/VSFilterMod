@@ -24,6 +24,8 @@
 #include <cmath>
 #include <math.h>
 #include <time.h>
+#include <algorithm>
+#include <vector>
 #include "RTS.h"
 
 /* There used to be a process-wide screen-compatible HDC here, with a refcount,
@@ -35,6 +37,322 @@ static long revcolor(long c)
 {
     return ((c & 0xff0000) >> 16) + (c & 0xff00) + ((c & 0xff) << 16);
 }
+
+/* \glow is an output-pixel raster effect, like \blur: while it is parsed the
+ * radius is in user pixels, and GetSubtitle scales it to the renderer's
+ * eighth-pixel units. These helpers are only used after that scaling. */
+static int EffectiveGlowRadius(const STSStyle& style)
+{
+    if(!(style.mod_glowRadius > 0) || !(style.mod_glowStrength > 0)) return 0;
+    const double pixels = style.mod_glowRadius * (1.0 / 8.0);
+    if(!(pixels > 0)) return 0;
+    if(pixels >= 4096) return 4096;
+    return (int)(pixels + 0.5);
+}
+
+static int GlowStrengthQ8(const STSStyle& style)
+{
+    if(!(style.mod_glowStrength > 0)) return 0;
+    const double strength = style.mod_glowStrength > 64 ? 64 : style.mod_glowStrength;
+    return (int)(strength * 256 + 0.5);
+}
+
+namespace
+{
+
+/* 8-bit emitter canvas. The rasterizer paints body/outline coverage into it
+ * in the renderer's native inverted-alpha format; it is only the emitter
+ * shape, the glow itself is computed in the 16-bit plane below. */
+struct GlowCanvas
+{
+    int w = 0;
+    int h = 0;
+    std::vector<unsigned int> pixels;
+    SubPicDesc desc;
+
+    GlowCanvas(int width, int height) : w(width), h(height)
+    {
+        pixels.assign((size_t)w * h, 0xff000000); // pixmix uses inverted alpha
+        memset(&desc, 0, sizeof(desc));
+        desc.w = w;
+        desc.h = h;
+        desc.bpp = 32;
+        desc.pitch = w * 4;
+        desc.bits = (BYTE*)pixels.data();
+        desc.type = MSP_RGB32;
+    }
+
+    void ConvertToPremultipliedAlpha()
+    {
+        for(unsigned int& pixel : pixels)
+        {
+            const unsigned int alpha = 0xff - ((pixel >> 24) & 0xff);
+            pixel = (pixel & 0x00ffffff) | (alpha << 24);
+        }
+    }
+};
+
+/* Bloom-style emission plane in 16-bit premultiplied BGRA. Gaussian
+ * approximations at three radii are accumulated additively: a hot tight
+ * core, a mid component and a wide soft halo. The 16-bit pipeline keeps the
+ * long faint tail smooth instead of quantizing it away the way the 8-bit
+ * multi-pass blur did, which is what made the glow look like a flat sticker
+ * outline. The plane covers only the glow region of interest, so memory
+ * scales with the subtitle rather than the whole frame. */
+struct GlowPlane16
+{
+    int ox = 0, oy = 0, w = 0, h = 0;
+    std::vector<uint16_t> pixels;
+    std::vector<uint16_t> work;
+    std::vector<uint32_t> acc;
+
+    void Setup(int x, int y, int width, int height)
+    {
+        ox = x; oy = y; w = width; h = height;
+        const size_t n = (size_t)w * h * 4;
+        pixels.resize(n);
+        work.resize(n);
+        acc.assign(n, 0);
+    }
+
+    void LoadSource(const GlowCanvas& src)
+    {
+        for(int y = 0; y < h; y++)
+        {
+            const unsigned int* srow = &src.pixels[(size_t)(oy + y) * src.w + ox];
+            uint16_t* dst = &pixels[(size_t)y * w * 4];
+            for(int x = 0; x < w; x++)
+            {
+                const unsigned int p = srow[x];
+                dst[x * 4 + 0] = (uint16_t)((p & 0xff) * 257);
+                dst[x * 4 + 1] = (uint16_t)(((p >> 8) & 0xff) * 257);
+                dst[x * 4 + 2] = (uint16_t)(((p >> 16) & 0xff) * 257);
+                dst[x * 4 + 3] = (uint16_t)(((p >> 24) & 0xff) * 257);
+            }
+        }
+    }
+
+    /* Linear-light accumulation in 32-bit fixed point: blur output scaled by
+     * the Q8 weight without reduction, so the full exposure range survives
+     * for tone mapping. Maximum is 65535 x 16384 (strength 64), well within
+     * uint32 range. */
+    void Accumulate(int weightQ8)
+    {
+        for(size_t i = 0; i < acc.size(); i++)
+            acc[i] += (uint32_t)pixels[i] * (uint32_t)weightQ8;
+    }
+};
+
+static void BoxBlurHorizontal16(const std::vector<uint16_t>& src, std::vector<uint16_t>& dst,
+                                int w, int h, int radius)
+{
+    if(radius <= 0)
+    {
+        for(size_t i = 0, n = (size_t)w * h * 4; i < n; i++) dst[i] = src[i];
+        return;
+    }
+
+    const unsigned int divisor = (unsigned int)(radius * 2 + 1);
+    for(int y = 0; y < h; y++)
+    {
+        const size_t row = (size_t)y * w;
+        unsigned int sums[4] = {0, 0, 0, 0};
+        for(int k = -radius; k <= radius; k++)
+        {
+            const int x = k;
+            if(x >= 0 && x < w)
+                for(int c = 0; c < 4; c++) sums[c] += src[(row + x) * 4 + c];
+        }
+
+        for(int x = 0; x < w; x++)
+        {
+            for(int c = 0; c < 4; c++)
+                dst[(row + x) * 4 + c] = (uint16_t)((sums[c] + divisor / 2) / divisor);
+            const int addX = x + radius + 1;
+            const int removeX = x - radius;
+            if(addX >= 0 && addX < w)
+                for(int c = 0; c < 4; c++) sums[c] += src[(row + addX) * 4 + c];
+            if(removeX >= 0 && removeX < w)
+                for(int c = 0; c < 4; c++) sums[c] -= src[(row + removeX) * 4 + c];
+        }
+    }
+}
+
+static void BoxBlurVertical16(const std::vector<uint16_t>& src, std::vector<uint16_t>& dst,
+                              int w, int h, int radius)
+{
+    if(radius <= 0)
+    {
+        for(size_t i = 0, n = (size_t)w * h * 4; i < n; i++) dst[i] = src[i];
+        return;
+    }
+
+    const unsigned int divisor = (unsigned int)(radius * 2 + 1);
+    for(int x = 0; x < w; x++)
+    {
+        unsigned int sums[4] = {0, 0, 0, 0};
+        for(int k = -radius; k <= radius; k++)
+        {
+            const int y = k;
+            if(y >= 0 && y < h)
+                for(int c = 0; c < 4; c++) sums[c] += src[((size_t)y * w + x) * 4 + c];
+        }
+
+        for(int y = 0; y < h; y++)
+        {
+            for(int c = 0; c < 4; c++)
+                dst[((size_t)y * w + x) * 4 + c] = (uint16_t)((sums[c] + divisor / 2) / divisor);
+            const int addY = y + radius + 1;
+            const int removeY = y - radius;
+            if(addY >= 0 && addY < h)
+                for(int c = 0; c < 4; c++) sums[c] += src[((size_t)addY * w + x) * 4 + c];
+            if(removeY >= 0 && removeY < h)
+                for(int c = 0; c < 4; c++) sums[c] -= src[((size_t)removeY * w + x) * 4 + c];
+        }
+    }
+}
+
+static void BlurGlowPlane16(GlowPlane16& plane, int radius)
+{
+    if(radius <= 0) return;
+
+    /* Three zero-padded box blurs are a close integer approximation of a
+     * Gaussian kernel. Their cost is independent of the blur radius. */
+    const int radii[3] = {(radius + 2) / 3, (radius + 1) / 3, radius / 3};
+    for(int pass = 0; pass < 3; pass++)
+    {
+        BoxBlurHorizontal16(plane.pixels, plane.work, plane.w, plane.h, radii[pass]);
+        BoxBlurVertical16(plane.work, plane.pixels, plane.w, plane.h, radii[pass]);
+    }
+}
+
+static BYTE GlowClipAlpha(const BYTE* pAlphaMask, int maskWidth, const MOD_MOVEVC& mod_vc, int x, int y)
+{
+    /* Rasterizer::Draw historically samples a vector clip one row lower than
+     * the nominal frame coordinate. Use the same mapping here so the glow is
+     * clipped to exactly the region in which its source text was allowed to
+     * render. */
+    if(!mod_vc.enable)
+    {
+        int rows = mod_vc.spd.cy;
+        if(mod_vc.size.cy > 0 && mod_vc.size.cy < rows) rows = mod_vc.size.cy;
+        if(rows <= 0) return 0;
+        int my = y + 1;
+        if(my >= rows) my = rows - 1;
+        return pAlphaMask[(size_t)my * maskWidth + x];
+    }
+
+    const int mx = x - mod_vc.pos.x;
+    const int my = y + 1 - mod_vc.pos.y;
+    if(mx < 0 || mx >= mod_vc.size.cx || my < 0 || my >= mod_vc.size.cy)
+        return mod_vc.isInverse ? 0x40 : 0;
+    return pAlphaMask[(size_t)my * mod_vc.size.cx + mx];
+}
+
+static void CompositeGlowPlane(const GlowPlane16& plane, SubPicDesc& spd, const CRect& roi,
+                               int strengthQ8, const BYTE* pAlphaMask, const MOD_MOVEVC& mod_vc)
+{
+    for(int y = roi.top; y < roi.bottom; y++)
+    {
+        unsigned int* dstrow = (unsigned int*)((BYTE*)spd.bits + y * spd.pitch);
+        const size_t lrow = (size_t)(y - plane.oy) * plane.w;
+        for(int x = roi.left; x < roi.right; x++)
+        {
+            int pixelStrengthQ8 = strengthQ8;
+            if(pAlphaMask)
+            {
+                /* Clipper masks use the rasterizer's 6-bit coverage scale. */
+                pixelStrengthQ8 = (strengthQ8 * GlowClipAlpha(pAlphaMask, spd.w, mod_vc, x, y) + 32) >> 6;
+                if(!pixelStrengthQ8) continue;
+            }
+
+            const size_t idx = (lrow + (x - plane.ox)) * 4;
+
+            /* Reinhard tone mapping compresses the emission asymptotically
+             * instead of clipping it, so the glow always keeps a visible
+             * brightness gradient instead of saturating into a flat cloud.
+             * GLOW_FULLSCALE is intensity 1.0 at strength 1; the shoulder
+             * sits at a quarter of that. The hue-preserving scale factor of
+             * the alpha channel is applied to the premultiplied colours. */
+            const unsigned long long fullscale = 65535ull * 256ull;
+            const unsigned long long shoulder = fullscale * 15 / 100;
+            unsigned long long xa = plane.acc[idx + 3];
+            unsigned long long xb = plane.acc[idx + 0];
+            unsigned long long xg = plane.acc[idx + 1];
+            unsigned long long xr = plane.acc[idx + 2];
+            if(pixelStrengthQ8 < 256)
+            {
+                xa = xa * pixelStrengthQ8 >> 8;
+                xb = xb * pixelStrengthQ8 >> 8;
+                xg = xg * pixelStrengthQ8 >> 8;
+                xr = xr * pixelStrengthQ8 >> 8;
+            }
+            if(!xa) continue;
+
+            const int sa = (int)((xa * 255 + (xa + shoulder) / 2) / (xa + shoulder));
+            if(!sa) continue;
+            /* Blur rounding can make a colour channel exceed alpha by one
+             * least-significant unit; clamp so packing never carries. */
+            const int sb = (std::min)(255, (int)((xb * sa + xa / 2) / xa));
+            const int sg = (std::min)(255, (int)((xg * sa + xa / 2) / xa));
+            const int sr = (std::min)(255, (int)((xr * sa + xa / 2) / xa));
+
+            unsigned int& dstpixel = dstrow[x];
+            const unsigned int dst = dstpixel;
+            const int invsa = 0xff - sa;
+            const int b = (std::min)(255, (int)((dst & 0xff) * invsa >> 8) + sb);
+            const int g = (std::min)(255, (int)(((dst >> 8) & 0xff) * invsa >> 8) + sg);
+            const int r = (std::min)(255, (int)(((dst >> 16) & 0xff) * invsa >> 8) + sr);
+            const int a = (int)(((dst >> 24) & 0xff) * invsa >> 8);
+            dstpixel = (unsigned int)b | ((unsigned int)g << 8) | ((unsigned int)r << 16) | ((unsigned int)a << 24);
+        }
+    }
+}
+
+struct GlowPass
+{
+    int radius;
+    int strengthQ8;
+
+    bool operator==(const GlowPass& other) const
+    {
+        return radius == other.radius && strengthQ8 == other.strengthQ8;
+    }
+};
+
+static void CollectGlowPasses(CSubtitle* subtitle, std::vector<GlowPass>& passes)
+{
+    passes.clear();
+    POSITION linepos = subtitle->GetHeadPosition();
+    while(linepos)
+    {
+        CLine* line = subtitle->GetNext(linepos);
+        POSITION wordpos = line->GetHeadPosition();
+        while(wordpos)
+        {
+            CWord* word = line->GetNext(wordpos);
+            const int radius = EffectiveGlowRadius(word->m_style);
+            if(radius <= 0) continue;
+            const GlowPass pass = {radius, GlowStrengthQ8(word->m_style)};
+            if(std::find(passes.begin(), passes.end(), pass) == passes.end())
+                passes.push_back(pass);
+        }
+    }
+    std::sort(passes.begin(), passes.end(), [](const GlowPass& a, const GlowPass& b)
+    {
+        if(a.radius != b.radius) return a.radius < b.radius;
+        return a.strengthQ8 < b.strengthQ8;
+    });
+}
+
+static CRect IntersectGlowRect(const CRect& a, const CRect& b)
+{
+    return CRect((std::max)(a.left, b.left), (std::max)(a.top, b.top),
+                 (std::min)(a.right, b.right), (std::min)(a.bottom, b.bottom));
+}
+
+} // namespace
+
 
 //////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -881,7 +1199,7 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
 }
 
 #ifdef _VSMOD // patch m006. moveable vector clip
-CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt)
+CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt, int glowRadiusFilter, int glowStrengthQ8Filter)
 #else
 CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha)
 #endif
@@ -895,6 +1213,13 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
 
         if(w->m_fLineBreak) return(bbox); // should not happen since this class is just a line of text without any breaks
 
+        const bool glowPass = glowRadiusFilter >= 0;
+        if(glowPass && (EffectiveGlowRadius(w->m_style) != glowRadiusFilter || GlowStrengthQ8(w->m_style) != glowStrengthQ8Filter))
+        {
+            p.x += w->m_width;
+            continue;
+        }
+
         if(w->m_style.outlineWidthX + w->m_style.outlineWidthY > 0 && !(w->m_ktype == 2 && time < w->m_kstart))
         {
             int x = p.x;
@@ -905,7 +1230,7 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
 #endif
             DWORD aoutline = w->m_style.alpha[2];
             if(alpha > 0) aoutline += MulDiv(alpha, 0xff - w->m_style.alpha[2], 0xff);
-            COLORREF outline = revcolor(w->m_style.colors[2]) | ((0xff - aoutline) << 24);
+            COLORREF outline = revcolor(glowPass ? w->m_style.colors[0] : w->m_style.colors[2]) | ((0xff - aoutline) << 24);
             DWORD sw[6] = {outline, 0xffffffff};
 
 #ifdef _VSMOD // patch m011. jitter
@@ -946,7 +1271,7 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
 }
 
 #ifdef _VSMOD // patch m006. moveable vector clip
-CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt)
+CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt, int glowRadiusFilter, int glowStrengthQ8Filter)
 #else
 CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha)
 #endif
@@ -959,6 +1284,13 @@ CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoin
         CWord* w = GetNext(pos);
 
         if(w->m_fLineBreak) return(bbox); // should not happen since this class is just a line of text without any breaks
+
+        const bool glowPass = glowRadiusFilter >= 0;
+        if(glowPass && (EffectiveGlowRadius(w->m_style) != glowRadiusFilter || GlowStrengthQ8(w->m_style) != glowStrengthQ8Filter))
+        {
+            p.x += w->m_width;
+            continue;
+        }
 
         int x = p.x;
 #ifdef _VSMOD // patch m001. Vertical fontspacing
@@ -1777,6 +2109,36 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             ;
         else if(!cmd.Find(L"i"))
             params.Add(cmd.Mid(1)), cmd = cmd.Left(1);
+#ifdef _VSMOD // patch m012. glow
+        else if(!cmd.Find(L"glow"))
+        {
+            if(cmd.GetLength() > 4)
+            {
+                const WCHAR suffixStart = cmd[4];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(4));
+                    cmd = cmd.Left(4);
+                }
+            }
+        }
+#endif
+#ifdef _VSMOD // patch m013. RGB split
+        /* Must precede the  prefix branch, which would otherwise eat the
+         * tag as a style reset. */
+        else if(!cmd.Find(L"rgb"))
+        {
+            if(cmd.GetLength() > 3)
+            {
+                const WCHAR suffixStart = cmd[3];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(3));
+                    cmd = cmd.Left(3);
+                }
+            }
+        }
+#endif
 #ifdef _VSMOD // patch m011. jitter
         else if(!cmd.Find(L"jitter"))
             ;
@@ -2364,6 +2726,38 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                             ? (n == 0 ? false : n == 1 ? true : org.fItalic)
                                 : org.fItalic;
         }
+#ifdef _VSMOD // patch m012. glow
+        else if(cmd == L"glow")
+        {
+            if(params.GetCount() > 0)
+            {
+                const double radius = vsfm::WcsToD(params[0], NULL);
+                const double strength = params.GetCount() > 1 ? vsfm::WcsToD(params[1], NULL) : 1.0;
+                const double nr = CalcAnimation(radius, style.mod_glowRadius, fAnimate);
+                const double ns = CalcAnimation(strength, style.mod_glowStrength, fAnimate);
+                style.mod_glowRadius = !(nr > 0) ? 0 : nr > 4096 ? 4096 : nr;
+                style.mod_glowStrength = !(ns > 0) ? 0 : ns > 64 ? 64 : ns;
+            }
+            else
+            {
+                style.mod_glowRadius = org.mod_glowRadius;
+                style.mod_glowStrength = org.mod_glowStrength;
+            }
+        }
+        else if(cmd == L"rgb")
+        {
+            if(params.GetCount() > 0)
+            {
+                const double dist = vsfm::WcsToD(params[0], NULL);
+                const double nd = CalcAnimation(dist, style.mod_rgbSplit, fAnimate);
+                style.mod_rgbSplit = nd > 4096 ? 4096 : nd < -4096 ? -4096 : nd;
+            }
+            else
+            {
+                style.mod_rgbSplit = org.mod_rgbSplit;
+            }
+        }
+#endif
 #ifdef _VSMOD // patch m011. jitter
         else if(cmd == L"jitter") // {\jitter(left,right,up,down,period,[seed])}
         {
@@ -3064,6 +3458,9 @@ CSubtitle* CRenderedTextSubtitle::GetSubtitle(int entry)
         tmp.outlineWidthY *= (m_fScaledBAS ? sub->m_scaley : 1) * 8;
         tmp.shadowDepthX *= (m_fScaledBAS ? sub->m_scalex : 1) * 8;
         tmp.shadowDepthY *= (m_fScaledBAS ? sub->m_scaley : 1) * 8;
+#ifdef _VSMOD // patch m012. glow
+        tmp.mod_glowRadius *= 8;
+#endif
 
         if(m_nPolygon)
         {
@@ -3579,6 +3976,126 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
         iclipRect[2] = CRect(clipRect.right, clipRect.top, spd.w, clipRect.bottom);
         iclipRect[3] = CRect(0, clipRect.bottom, spd.w, spd.h);
 
+#ifdef _VSMOD // patch m012. glow
+        std::vector<GlowPass> glowPasses;
+        CollectGlowPasses(s, glowPasses);
+        for(auto glowIt = glowPasses.rbegin(); glowIt != glowPasses.rend(); ++glowIt)
+        {
+            const int glowRadius = glowIt->radius;
+            const int glowStrengthQ8 = glowIt->strengthQ8;
+            const int blurRadius = (std::min)(glowRadius, (std::max)(spd.w, spd.h));
+            GlowCanvas glowCanvas(spd.w, spd.h);
+            CRect glowSourceBBox(0, 0, 0, 0);
+
+            const auto paintGlowSource = [&](CRect& sourceClipRect)
+            {
+                p = p2;
+                pos = s->GetHeadPosition();
+                while(pos)
+                {
+                    CLine* l = s->GetNext(pos);
+
+                    p.x = (s->m_scrAlignment % 3) == 1 ? org.x
+                          : (s->m_scrAlignment % 3) == 0 ? org.x - l->m_width
+                          :                                  org.x - (l->m_width / 2);
+
+                    /* The glow source is clipped before blurring. Otherwise a
+                     * word hidden by \clip could still cast light into the
+                     * visible part of the frame. */
+                    glowSourceBBox |= l->PaintOutline(glowCanvas.desc, sourceClipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt, glowRadius, glowStrengthQ8);
+                    glowSourceBBox |= l->PaintBody(glowCanvas.desc, sourceClipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt, glowRadius, glowStrengthQ8);
+
+                    p.y += l->m_ascent + l->m_descent;
+                }
+            };
+
+            if(s->m_clipInverse)
+            {
+                for(int iclip = 0; iclip < 4; iclip++) paintGlowSource(iclipRect[iclip]);
+            }
+            else
+            {
+                paintGlowSource(clipRect);
+            }
+
+            if(glowSourceBBox.IsRectEmpty()) continue;
+
+            glowCanvas.ConvertToPremultipliedAlpha();
+
+            CRect glowRect(glowSourceBBox.left - blurRadius - 1, glowSourceBBox.top - blurRadius - 1,
+                           glowSourceBBox.right + blurRadius + 1, glowSourceBBox.bottom + blurRadius + 1);
+            if(glowRect.left < 0) glowRect.left = 0;
+            if(glowRect.top < 0) glowRect.top = 0;
+            if(glowRect.right > spd.w) glowRect.right = spd.w;
+            if(glowRect.bottom > spd.h) glowRect.bottom = spd.h;
+            if(glowRect.IsRectEmpty()) continue;
+
+            GlowPlane16 plane;
+            plane.Setup(glowRect.left, glowRect.top,
+                        glowRect.right - glowRect.left, glowRect.bottom - glowRect.top);
+
+            /* Bloom-style mixture of three Gaussian scales: a hot tight core,
+             * a mid component and a wide soft halo. Equal radii are merged so
+             * small glows do not pay for redundant passes. */
+            int scaleCount = 0;
+            struct { int radius; int weight; } scales[3];
+            const int scaleRadius[3] = {blurRadius / 6, blurRadius * 2 / 5, blurRadius};
+            /* Exposure: strength scales the linear emission before tone
+             * mapping, matching AE-style exposure behaviour. Base weights
+             * 0.7/0.45/0.35 sum to 1.5, so the core can rise well above
+             * intensity 1.0 and the tone mapper shapes it into a hot core
+             * with a long soft falloff instead of a flat cloud. */
+            const int scaleWeight[3] = {(179 * glowStrengthQ8 + 128) >> 8,
+                                        (115 * glowStrengthQ8 + 128) >> 8,
+                                        (90 * glowStrengthQ8 + 128) >> 8};
+            for(int i = 0; i < 3; i++)
+            {
+                const int radius = (std::max)(1, scaleRadius[i]);
+                int found = -1;
+                for(int j = 0; j < scaleCount; j++)
+                    if(scales[j].radius == radius) found = j;
+                if(found >= 0) scales[found].weight += scaleWeight[i];
+                else
+                {
+                    scales[scaleCount].radius = radius;
+                    scales[scaleCount].weight = scaleWeight[i];
+                    scaleCount++;
+                }
+            }
+
+            for(int i = 0; i < scaleCount; i++)
+            {
+                plane.LoadSource(glowCanvas);
+                BlurGlowPlane16(plane, scales[i].radius);
+                plane.Accumulate(scales[i].weight);
+            }
+
+            if(s->m_clipInverse)
+            {
+                for(int iclip = 0; iclip < 4; iclip++)
+                {
+                    const CRect compositeRect = IntersectGlowRect(glowRect, iclipRect[iclip]);
+                    if(!compositeRect.IsRectEmpty())
+                    {
+                        CompositeGlowPlane(plane, spd, compositeRect, 256, pAlphaMask, mod_vc);
+                        bbox2 |= compositeRect;
+                    }
+                }
+            }
+            else
+            {
+                const CRect compositeRect = IntersectGlowRect(glowRect, clipRect);
+                if(!compositeRect.IsRectEmpty())
+                {
+                    CompositeGlowPlane(plane, spd, compositeRect, 256, pAlphaMask, mod_vc);
+                    bbox2 |= compositeRect;
+                }
+            }
+        }
+
+        p = p2;
+#endif
+
         pos = s->GetHeadPosition();
         while(pos)
         {
@@ -3693,6 +4210,73 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 #endif
             p.y += l->m_ascent + l->m_descent;
         }
+
+#ifdef _VSMOD // patch m013. RGB split
+        /* Chromatic aberration: shift the red and blue channels of the painted
+         * sentence in opposite directions. This is mathematically identical to
+         * drawing per-channel glyphs with offsets, but needs no changes to the
+         * painting pipeline. Applies to the whole sentence; the largest
+         * magnitude wins when words disagree. */
+        double rgbSplit = 0;
+        POSITION rgblinepos = s->GetHeadPosition();
+        while(rgblinepos)
+        {
+            CLine* l = s->GetNext(rgblinepos);
+            POSITION rgbwordpos = l->GetHeadPosition();
+            while(rgbwordpos)
+            {
+                const double d = l->GetNext(rgbwordpos)->m_style.mod_rgbSplit;
+                if(fabs(d) > fabs(rgbSplit)) rgbSplit = d;
+            }
+        }
+        int rgbShift = (int)(rgbSplit >= 0 ? rgbSplit + 0.5 : rgbSplit - 0.5);
+        if(rgbShift > 4096) rgbShift = 4096;
+        else if(rgbShift < -4096) rgbShift = -4096;
+        if(rgbShift && !bbox2.IsRectEmpty())
+        {
+            const int ad = rgbShift < 0 ? -rgbShift : rgbShift;
+            CRect rr(bbox2.left - ad, bbox2.top, bbox2.right + ad, bbox2.bottom);
+            if(rr.left < 0) rr.left = 0;
+            if(rr.right > spd.w) rr.right = spd.w;
+            if(rr.bottom > spd.h) rr.bottom = spd.h;
+            if(rr.top < 0) rr.top = 0;
+            const int rw = rr.right - rr.left;
+            const int rh = rr.bottom - rr.top;
+            if(rw > 0 && rh > 0)
+            {
+                std::vector<unsigned int> backup((size_t)rw * rh);
+                for(int y = 0; y < rh; y++)
+                {
+                    const unsigned int* srow = (const unsigned int*)((const BYTE*)spd.bits + (rr.top + y) * spd.pitch) + rr.left;
+                    memcpy(&backup[(size_t)y * rw], srow, rw * 4);
+                }
+                for(int y = 0; y < rh; y++)
+                {
+                    unsigned int* drow = (unsigned int*)((BYTE*)spd.bits + (rr.top + y) * spd.pitch) + rr.left;
+                    for(int x = 0; x < rw; x++)
+                    {
+                        /* BGRA byte order: blue=0, green=1, red=2, alpha=3.
+                         * Red moves by +shift, blue by -shift. */
+                        int xr = x - rgbShift;
+                        int xb = x + rgbShift;
+                        if(xr < 0) xr = 0; else if(xr >= rw) xr = rw - 1;
+                        if(xb < 0) xb = 0; else if(xb >= rw) xb = rw - 1;
+                        const unsigned int pr = backup[(size_t)y * rw + xr];
+                        const unsigned int pb = backup[(size_t)y * rw + xb];
+                        unsigned int px = backup[(size_t)y * rw + x];
+                        px = (px & 0xff00ff00u)
+                             | (pb & 0x000000ffu)
+                             | (pr & 0x00ff0000u);
+                        drow[x] = px;
+                    }
+                }
+                bbox2.left -= ad;
+                bbox2.right += ad;
+                if(bbox2.left < 0) bbox2.left = 0;
+                if(bbox2.right > spd.w) bbox2.right = spd.w;
+            }
+        }
+#endif
 
         //delete s;
     }

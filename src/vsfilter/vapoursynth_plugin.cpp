@@ -207,7 +207,13 @@ void TextSubCreateUnguarded(const VSMap* in, VSMap* out, void* userData, VSCore*
      * blended whole here. Read it so that it is not reported as unknown. */
     (void)vsapi->mapGetInt(in, "accurate", 0, &err);
 
-    if (!d->source.Open(vsfm::ScriptPath(file, true), (int)charset))
+    const vsfm::SubtitleWarningCallback warningCallback = [vsapi, core, name](const CString& message) {
+        if (!vsapi->logMessage) return;
+        const std::string utf8 = vsfm::W2U8(message.GetString(), (size_t)message.GetLength());
+        const std::string text = name + ": " + utf8;
+        vsapi->logMessage(mtWarning, text.c_str(), core);
+    };
+    if (!d->source.Open(vsfm::ScriptPath(file, true), (int)charset, warningCallback))
         return fail(std::string("can't open \"") + file + "\"");
 
     VSFilterDependency deps[] = { { d->node, rpStrictSpatial } };

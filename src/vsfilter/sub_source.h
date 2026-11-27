@@ -30,6 +30,7 @@
 #include "../subpic/mem_subpic.h"
 #include "vfr.h"
 
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -42,13 +43,15 @@ namespace vsfm {
  * Elsewhere scripts are UTF-8. */
 std::wstring ScriptPath(const char* s, bool preferUtf8);
 
+typedef std::function<void(const CString&)> SubtitleWarningCallback;
+
 class SubtitleSource
 {
 public:
     SubtitleSource();
     ~SubtitleSource();
 
-    bool Open(const std::wstring& path, int charset);
+    bool Open(const std::wstring& path, int charset, SubtitleWarningCallback warningCallback = nullptr);
     bool OpenVfr(const std::wstring& path);
     bool HasVfr() const { return (bool)m_vfr; }
 

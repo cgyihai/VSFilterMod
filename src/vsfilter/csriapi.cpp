@@ -467,6 +467,16 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "help": "次要四角渐变透明度"
     },
     {
+      "name": "glow",
+      "signature": "\\glow(radius[,strength])",
+      "help": "文字发光；\\glow20 是半径 20 的简写"
+    },
+    {
+      "name": "rgb",
+      "signature": "\\rgb(distance)",
+      "help": "RGB 色差分离；\\rgb4 是偏移 4 像素的简写"
+    },
+    {
       "name": "jitter",
       "signature": "\\jitter(left,right,up,down,period[,seed])",
       "help": "逐帧随机抖动"

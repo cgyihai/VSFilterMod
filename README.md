@@ -13,7 +13,7 @@ plugin (`vsfm.TextSubMod`), plus `vsfmrender`, a command line tool that
 renders subtitles to **BDN+XML** for Blu-ray authoring.
 
 The ASS parser and the rasterizer are VSFilterMod's own, so the whole mod tag
-set renders as it always did: `\pngimg` picture backgrounds, gradients,
+set renders as it always did: `\pngimg` picture backgrounds, `\glow` text glow, gradients,
 moveable vector clips, `\rnd` jitter, distort, `\frs` symbol rotation,
 Z-coordinates and vertical spacing.
 
@@ -148,6 +148,54 @@ vsfmrender --size 1920x1080 --fps 23.976 input.ass output.xml
 | `--font-report` | List what every font the script uses resolved to |
 | `--strict-fonts` | Exit with status 3 if any font had to be substituted |
 | `-q, --quiet` | No progress output |
+
+### RGB split (\rgb)
+
+The \rgb tag shifts the red and blue channels of the text in opposite
+directions, a chromatic-aberration / glitch effect. These forms are equivalent:
+
+```ass
+{\rgb4}Text
+{\rgb(4)}Text
+```
+
+The distance is measured in output pixels, may be negative to swap the fringe
+directions, supports 	 animation, is capped at 4096 and disabled by \rgb0.
+The split applies to the whole sentence; when words disagree the largest
+magnitude wins.
+
+### Text glow (\glow)
+
+The \glow tag draws a soft halo behind the text. These forms are equivalent:
+
+```ass
+{\glow20}Text
+{\glow(20)}Text
+```
+
+A second number is the linear strength multiplier (the default is `1`):
+
+```ass
+{\glow(20,1.5)}Stronger glow
+{\glow0}Glow disabled
+```
+
+The radius is measured in output pixels, like \blur. The glow normally uses
+the primary text colour; gradient and image fills keep their own fill colours,
+the outline contributes its shape, and the shadow does not glow. Text
+transparency, \fade/\fad, rectangular/vector/moving \clip/\iclip, and \t
+animation are respected. The radius is limited to 4096 output pixels and the
+strength multiplier to 64.
+
+The glow is a bloom-style multi-scale effect: the emitter shape is blurred
+at three radii (tight core, mid, wide halo) in a 16-bit linear-light pipeline
+and accumulated additively, then compressed with a Reinhard tone curve so the
+halo keeps a smooth brightness gradient instead of saturating into a flat
+cloud. The strength multiplier acts as exposure: it scales the linear emission
+before tone mapping. It is still an alpha-blended raster effect rather than a
+true HDR additive reconstruction of After Effects Deep Glow, and separate glow
+colour/alpha controls such as \glowc and \glowa are reserved as possible
+future extensions and are not implemented yet.
 
 ### Same fonts on every machine
 

@@ -1,5 +1,5 @@
 project('vsfiltermod', 'c', 'cpp',
-    version : '1.4.0',
+    version : '1.5.0',
     license : 'GPL-2.0-or-later',
     meson_version : '>=0.59.0',
     default_options : [
@@ -319,6 +319,29 @@ if get_option('tests')
                          meson.current_build_dir() / 'regression-' + name + '.xml'],
                  timeout : 60)
         endforeach
+
+        if py.found()
+            test('unknown-style-warning', py,
+                 args : [files('tests/unknown_style_warning.py'),
+                         vsfmrender.full_path(),
+                         meson.current_build_dir()],
+                 depends : [vsfmrender],
+                 timeout : 60)
+
+            test('glow', py,
+                 args : [files('tests/glow.py'),
+                         vsfmrender.full_path(),
+                         meson.current_build_dir() / 'glow-test'],
+                 depends : [vsfmrender],
+                 timeout : 60)
+
+            test('rgb', py,
+                 args : [files('tests/rgb.py'),
+                         vsfmrender.full_path(),
+                         meson.current_build_dir() / 'rgb-test'],
+                 depends : [vsfmrender],
+                 timeout : 60)
+        endif
     endif
 
     # Loads the plugin into VapourSynth and renders the consistency fixtures

@@ -351,6 +351,11 @@ bool RenderBdnXml(const std::string& subtitlePath,
 
     CCritSec lock;
     CRenderedTextSubtitle rts(&lock);
+    rts.m_warning_callback = [progress](const CString& message) {
+        if (!progress) return;
+        const std::string utf8 = W2U8(message.GetString(), (size_t)message.GetLength());
+        progress->OnMessage("warning: " + utf8);
+    };
 
     if (!rts.Open(CString(U82W(subtitlePath.c_str(), subtitlePath.size()).c_str()), DEFAULT_CHARSET)) {
         if (error) *error = "cannot parse " + subtitlePath;

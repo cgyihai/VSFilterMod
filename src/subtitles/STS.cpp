@@ -2380,7 +2380,7 @@ STSStyle* CSimpleTextSubtitle::CreateDefaultStyle(int CharSet)
 void CSimpleTextSubtitle::ChangeUnknownStylesToDefault()
 {
     CAtlMap<CString, STSStyle*, CStringElementTraits<CString> > unknown;
-    bool fReport = true;
+    CString unknown_styles;
 
     for(ptrdiff_t i = 0; i < GetCount(); i++)
     {
@@ -2394,14 +2394,27 @@ void CSimpleTextSubtitle::ChangeUnknownStylesToDefault()
                 /* Used to raise a modal MessageBox. Like the syntax-error
                  * dialog below, it would hang Aegisub's render thread or a
                  * batch BDN+XML job; the line still falls back to Default. */
-                if(fReport)
-                    TRACE("STS: unknown style \"%ls\", using Default\n", (LPCWSTR)stse.style);
+                if(stse.style != _T("Default"))
+                {
+                    if(!unknown_styles.IsEmpty())
+                    {
+                        unknown_styles += _T(", ");
+                    }
+                    unknown_styles += stse.style;
+                }
 
                 unknown[stse.style] = NULL;
             }
 
             stse.style = _T("Default");
         }
+    }
+
+    if(!unknown_styles.IsEmpty())
+    {
+        CString msg;
+        msg.Format(_T("Unknown subtitle styles were replaced with \"Default\": %s"), unknown_styles);
+        if(m_warning_callback) m_warning_callback(msg);
     }
 }
 
@@ -3297,6 +3310,10 @@ void STSStyle::SetDefault()
     mod_grad.clear();
     // patch m007. symbol rotating
     mod_fontOrient = 0;
+    // patch m012. glow
+    mod_glowRadius = 0;
+    mod_glowStrength = 1;
+    mod_rgbSplit = 0;
 #endif
 }
 
@@ -3335,6 +3352,10 @@ bool STSStyle::operator == (STSStyle& s)
            && mod_distort == s.mod_distort
            // patch m011. jitter
            && mod_jitter == s.mod_jitter
+           // patch m012. glow
+           && mod_glowRadius == s.mod_glowRadius
+           && mod_glowStrength == s.mod_glowStrength
+           && mod_rgbSplit == s.mod_rgbSplit
 #endif
            && IsFontStyleEqual(s));
 }
@@ -3396,6 +3417,10 @@ void STSStyle::mod_CopyStyleFrom(const STSStyle& s)
     mod_distort = s.mod_distort;
     // patch m011. jitter
     mod_jitter = s.mod_jitter;
+    // patch m012. glow
+    mod_glowRadius = s.mod_glowRadius;
+    mod_glowStrength = s.mod_glowStrength;
+    mod_rgbSplit = s.mod_rgbSplit;
     // font
     charSet = s.charSet;
     fontName = s.fontName;

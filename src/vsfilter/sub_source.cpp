@@ -64,11 +64,13 @@ SubtitleSource::~SubtitleSource() = default;
  * a frame server through a C ABI. A script that makes the parser or the
  * renderer throw fails to open, or draws nothing on that frame. */
 
-bool SubtitleSource::Open(const std::wstring& path, int charset)
+bool SubtitleSource::Open(const std::wstring& path, int charset, SubtitleWarningCallback warningCallback)
 {
     try {
         m_rts.reset(new CRenderedTextSubtitle(&m_rtsLock));
+        m_rts->m_warning_callback = warningCallback;
         if (m_rts->Open(CString(path.c_str()), charset)) {
+            m_rts->m_warning_callback = nullptr;
             m_matrix = m_rts->m_eYCbCrMatrix;
             m_range = m_rts->m_eYCbCrRange;
             return true;

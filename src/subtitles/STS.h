@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "../compat/vsfm_compat.h"
 #include "TextFile.h"
 
@@ -187,6 +189,10 @@ public:
     MOD_DISTORT mod_distort;
     // patch m011. jitter
     MOD_JITTER mod_jitter;
+    // patch m012. glow: radius in pixels and a linear strength multiplier
+    double mod_glowRadius;
+    double mod_glowStrength;
+    double mod_rgbSplit;
 #endif
 
     STSStyle();
@@ -321,6 +327,8 @@ public:
     YCbCrRange     m_eYCbCrRange;
 
 public:
+    std::function<void(const CString&)> m_warning_callback;
+
     CSimpleTextSubtitle();
     virtual ~CSimpleTextSubtitle();
 
