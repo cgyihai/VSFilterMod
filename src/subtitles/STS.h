@@ -94,6 +94,14 @@ public:
     bool        bodyIsGradAlpha;
     int		mode[4];
 
+    // patch m015. arbitrary-angle gradient: when enabled, mode-1 gradients
+    // interpolate linearly between colors [0] (start) and [1] (end) along
+    // the given direction instead of the bilinear four-corner mix.
+    bool        angleEnabled;
+    double      angle;
+    double      angleCos;
+    double      angleSin;
+
 // for renderer
     int		height;
     int		width;

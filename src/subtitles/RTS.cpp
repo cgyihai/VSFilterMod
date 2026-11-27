@@ -2564,6 +2564,20 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
         else if(!cmd.Find(L"1img") || !cmd.Find(L"2img") || !cmd.Find(L"3img") || !cmd.Find(L"4img"))
             ;//params.Add(cmd.Mid(4)), cmd = cmd.Left(4);
 #endif
+#ifdef _VSMOD // patch m015. arbitrary-angle gradient
+        else if(!cmd.Find(L"vgrad"))
+        {
+            if(cmd.GetLength() > 5)
+            {
+                const WCHAR suffixStart = cmd[5];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(5));
+                    cmd = cmd.Left(5);
+                }
+            }
+        }
+#endif
 #ifdef _VSMOD // patch m004. gradient colors
         else if(!cmd.Find(L"1vc") || !cmd.Find(L"2vc") || !cmd.Find(L"3vc") || !cmd.Find(L"4vc"))
             ;//params.Add(cmd.Mid(3)), cmd = cmd.Left(3);
@@ -2921,6 +2935,26 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
         }
 #endif
 #ifdef _VSMOD // patch m004. gradient colors
+        else if(cmd == L"vgrad")
+        {
+            if(params.GetCount() > 0)
+            {
+                const double ang = vsfm::WcsToD(params[0], NULL);
+                const double na = CalcAnimation(ang, style.mod_grad.angle, fAnimate);
+                style.mod_grad.angle = na;
+                style.mod_grad.angleEnabled = true;
+                const double rad = na * 3.14159265358979323846 / 180.0;
+                style.mod_grad.angleCos = vsfm::DetCos(rad);
+                style.mod_grad.angleSin = vsfm::DetSin(rad);
+            }
+            else
+            {
+                style.mod_grad.angle = org.mod_grad.angle;
+                style.mod_grad.angleEnabled = org.mod_grad.angleEnabled;
+                style.mod_grad.angleCos = org.mod_grad.angleCos;
+                style.mod_grad.angleSin = org.mod_grad.angleSin;
+            }
+        }
         else if(cmd == L"1vc" || cmd == L"2vc" || cmd == L"3vc" || cmd == L"4vc")
         {
             int i = cmd[0] - '1';

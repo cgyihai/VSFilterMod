@@ -24,6 +24,16 @@
   transparency, \t animation and rectangular/vector/inverse/moving-vector
   clipping.
 
+### Arbitrary-angle gradient
+
+- \vgrad(angle): when a \1vc-style gradient is active, the bilinear
+  four-corner interpolation is replaced by a linear two-colour gradient along
+  the given direction in degrees. The first two vc colours act as start and
+  end; angle 0 runs left to right, 90 top to bottom. \vgrad45 shorthand form
+  works, \t animation is supported, and removing the tag restores the
+  classic bilinear mix. Regression suite tests/vgrad.py verifies direction,
+  reversal and syntax equivalence.
+
 ### Effect package
 
 - \glowc&HBBGGRR& and \glowa&HAA&: optional glow colour and alpha

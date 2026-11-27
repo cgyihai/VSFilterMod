@@ -3836,6 +3836,8 @@ bool MOD_GRADIENT::operator == (MOD_GRADIENT& mg)
             && mode[1] == mg.mode[1]
             && mode[2] == mg.mode[2]
             && mode[3] == mg.mode[3]
+            && angleEnabled == mg.angleEnabled
+            && angle == mg.angle
             && b_images[0] == mg.b_images[0]
             && b_images[1] == mg.b_images[1]
             && b_images[2] == mg.b_images[2]
@@ -3860,6 +3862,10 @@ void MOD_GRADIENT::clear()
     subpixy = 0;
     fadalpha = 0xFF;
     bodyIsGradAlpha = false;
+    angleEnabled = false;
+    angle = 0;
+    angleCos = 1;
+    angleSin = 0;
 }
 
 #include <math.h>
@@ -3870,6 +3876,36 @@ DWORD MOD_GRADIENT::getmixcolor(int tx, int ty, int i) // too slow T.T
     // gradient
     if(mode[i] == 1)
     {
+        // patch m015. arbitrary-angle gradient: project the pixel position
+        // onto the gradient direction and interpolate between the first two
+        // gradient colours (start/end). The projection range comes from the
+        // four box corners so the endpoints always land on the extremes.
+        if(angleEnabled && width > 0 && height > 0)
+        {
+            const double proj = tx * angleCos + ty * angleSin;
+            const double pW = width * angleCos;
+            const double pH = height * angleSin;
+            double pmin = 0, pmax = 0;
+            const double corners[3] = {pW, pH, pW + pH};
+            for(int ci = 0; ci < 3; ci++)
+            {
+                if(corners[ci] < pmin) pmin = corners[ci];
+                if(corners[ci] > pmax) pmax = corners[ci];
+            }
+            double t = pmax > pmin ? (proj - pmin) / (pmax - pmin) : 0;
+            if(t < 0) t = 0;
+            if(t > 1) t = 1;
+            DWORD colora = 0;
+            for(int j = 0; j < 3; j++)
+            {
+                const double cs = (color[i][0] >> (8 * j)) & 0xff;
+                const double ce = (color[i][1] >> (8 * j)) & 0xff;
+                colora |= ((DWORD)(cs * (1 - t) + ce * t) & 0xff) << (8 * j);
+            }
+            const DWORD al = (DWORD)(alpha[i][0] * (1 - t) + alpha[i][1] * t) & 0xff;
+            colora |= (((0xff - al) * (0xff - fadalpha)) & 0xff00) << 16;
+            return colora;
+        }
         double x = (double)tx / (double)width;
         double y = (double)ty / (double)height;
         for(int j = 0; j < 3; j++)

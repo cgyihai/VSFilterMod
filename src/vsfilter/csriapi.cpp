@@ -478,6 +478,11 @@ CSRIAPI const char *csri_typesub_tags_json(void)
     },
 
     {
+      "name": "vgrad",
+      "signature": "\\vgrad(angle)",
+      "help": "任意角度渐变：配合 \\1vc 使用，前两个颜色为起止色"
+    },
+    {
       "name": "glowc",
       "signature": "\\glowc&HBBGGRR&",
       "help": "发光颜色覆盖（默认跟随主要颜色）"

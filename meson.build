@@ -1,5 +1,5 @@
 project('vsfiltermod', 'c', 'cpp',
-    version : '1.6.0',
+    version : '1.7.0',
     license : 'GPL-2.0-or-later',
     meson_version : '>=0.59.0',
     default_options : [
@@ -346,6 +346,12 @@ if get_option('tests')
                  args : [files('tests/fxpackage.py'),
                          vsfmrender.full_path(),
                          meson.current_build_dir() / 'fxpackage-test'],
+                 depends : [vsfmrender],
+                 timeout : 120)
+            test('vgrad', py,
+                 args : [files('tests/vgrad.py'),
+                         vsfmrender.full_path(),
+                         meson.current_build_dir() / 'vgrad-test'],
                  depends : [vsfmrender],
                  timeout : 120)
         endif
