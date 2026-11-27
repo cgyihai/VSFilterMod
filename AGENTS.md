@@ -29,7 +29,8 @@
 ## 特效包路线图（2025 更新）
 
 已完成并发布（v1.6.0 / Windows v2.7.0）：
-- \glow bloom 发光、gb 色差
+- \glow bloom 发光、
+gb 色差
 - \glowc/\glowa 发光颜色与透明度覆盖
 - \iglow(/\iglowc/\iglowa) 内发光
 - \mblur(angle,length) 方向动态模糊
@@ -43,6 +44,28 @@
 移植注意：Windows 树用 wcstod/wcstol/cos/sin/pow 替代 vsfm::WcsTo*/Det*；
 提取跨平台补丁块时注意注释标记歧义（"patch m014. inner glow" 在解析器
 前缀链与渲染循环各出现一次，提取必须带第二行上下文）。
+
+## 下一个史诗：任意角度/径向渐变（已分析，未实施）
+
+现有渐变架构（patch m004）：
+- `MOD_GRADIENT`（STS.h ~L87）：`color[4][4]`/`alpha[4][4]` 存四角颜色，
+  `mode[i]` 1=双线性四角插值、2=PNG 背景；`width/height` 是字形包围盒。
+- 渲染时 `getmixcolor(tx, ty, i)`（STS.cpp ~L3866）逐像素算混合色，
+  在 Rasterizer.cpp 的 6+ 个 pixmix 调用点被调用（~L1176-1283）。
+- 解析标签 `vc`/`vc`/`va` 等在 RTS.cpp ParseSSATag。
+
+设计方案（供实施者参考）：
+- 新标签建议 `vg(angle)` 或给 vc 加角度参数——注意与现有 vc 语义兼容。
+- 实现要点：在 mode[i]==1 分支前加 angle 模式（建议 mode=3），把双线性
+  权重替换为沿角度方向的投影 t=(x*cos+y*sin)/len，两端颜色插值。
+- 必须用 det_math 的 DetCos/DetSin 保持跨平台确定性；Windows 树用 cos/sin。
+- 渐变的 width/height 在 RTS.cpp L1646 附近随 subpix 一起设置。
+- 移植注意：两树的 Rasterizer.cpp pixmix 调用点结构一致但行号不同。
+
+其他候选史诗（均未做，各需完整会话）：
+- 混合模式（加算/屏幕）——需改 CSRI/子图合成架构，工程量最大
+- 真透视 3D（rxry 目前是正交近似）——研究级
+- 轨道遮罩——语法设计+实现都复杂
 
 ## 旧版路线图存档
 （用户已批准，按序逐个实现）
