@@ -212,4 +212,36 @@ edit/write 工具直写，或 python 里用 chr(92) 拼接。写完用控制字�
   __m128 两份初始化——必须改为读取同一可变标量，否则 SSE 路径透视失效。
 - 解析器 persp 条目与 pin 一样必须位于 p 前缀分支之前。
 
-剩余候选：混合模式（加算/屏幕）——CSRI/子图合成 ABI 限制，工程量最大，压轴。
+剩余候选：~~混合模式~~（已否决，用户决议）：libass#347 证实渲染器看不到视频像素则
+  渲染期混合结构上不可能；CSRI ABI 只输出 RGBA，预览必然错误（违反 WYSIWYG），
+  Windows DirectShow 单树可做但破坏两树对等——投入产出比不成立。
+
+## 候选史诗 1 预分析：\img 系列强化（已完成侦察，未实施）
+
+现状（patch m010，\1img-\4img 已存在）：
+- PNG 填充采样在 STS.cpp getmixcolor 的 mode[i]==2 分支：已有环绕平铺
+  （while 循环 wrap）+ 双线性亚像素插值 + xoffset/yoffset/angle 参数。
+- **关键发现（改变设计）**：getmixcolor(wt, h, typ) 的 wt/h 来自 Rasterizer.cpp
+  的**逐词 overlay 光栅坐标**——纹理坐标空间是每个词的 bbox，平铺在词边界
+  重启，纹理不能跨词连续流动。渐变同理（x=tx/width 是逐词归一化）。
+  这意味着：
+  a) 强化清单第一项应该是**行级纹理坐标**（把词 overlay 的屏幕偏移传进
+     getmixcolor 或 rnfo，tx/ty 加上该偏移），否则缩放/平铺在小字号多词
+     文本上视觉破碎；
+  b) 渐变标签（vgrad/rgrad/mgrad）目前也是逐词归一化——这是既有语义，
+     改动会破坏兼容，只能给 img 新增模式，不动渐变。
+- 设计草案（供实施者）：
+  * 新标签 \imgscale(sx[,sy]) 或扩展 \1img 括号参数末尾加 sx,sy——
+    注意 legacy 参数顺序 file,xoffset,yoffset[,angle] 已被脚本依赖，
+    只能尾部追加；采样时 tx/=sx, ty/=sy（除法在 wrap 之前）。
+  * 行级坐标：rnfo 增加 overlay 屏幕原点偏移字段，在 RTS.cpp 三 pass
+    Rasterize 调用处填入；getmixcolor 的 mode==2 分支加回偏移。
+    逐词 bbox 偏移在 CWord::Paint 的 p 参数（1/8 像素）——注意单位换算。
+  * 测试：单字符纹理色标定位、跨词连续性（两词相邻处纹理无缝）、
+    缩放比例验证、确定性。
+
+## 候选史诗 2/3 备注
+- 打字机/逐字显现：\k 家族已覆盖逐字填充；真打字机（逐字出现+光标）
+  语义上是新功能，需求证据不足，优先级降档。
+- 收尾项（随时可做）：性能 profile、两树渲染输出位级交叉验证、
+  csriapi 元数据完整性审计、README 示例图补全。
