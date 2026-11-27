@@ -114,6 +114,14 @@ public:
     double      radialCx;
     double      radialCy;
 
+    // patch m022. multi-stop gradient: when enabled, the t-parameterised
+    // gradients (angle or radial; horizontal angle-0 when neither is set)
+    // interpolate piecewise-linearly through multiCount evenly spaced
+    // colour stops instead of the two endpoint colours. Body channel only.
+    bool        multiEnabled;
+    int         multiCount;
+    COLORREF    multiColor[8];
+
 // for renderer
     int		height;
     int		width;

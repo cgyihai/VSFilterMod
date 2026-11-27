@@ -172,6 +172,15 @@
   output-pixel coordinates. TypeSub tag metadata includes the new
   tag.
 
+- `\mgrad(c1,c2[,c3,...])`: multi-stop gradients. Two to eight
+  colour stops in ASS hex order (`&HBBGGRR`), evenly spaced along the
+  active gradient direction: the `\vgrad` angle or the `\rgrad`
+  radius when one is set, horizontal otherwise. The stops apply to
+  the body channel and interpolate piecewise-linearly in IEEE double
+  arithmetic (bit-identical across platforms); `\mgrad0` or fewer
+  than two colours disables the effect. TypeSub tag metadata
+  includes the new tag.
+
 - `csri_open_file`/`csri_open_mem` share one instance-setup path; remaining
   POSIX portability and build documentation work.
 

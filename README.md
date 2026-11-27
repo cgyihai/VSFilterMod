@@ -257,6 +257,13 @@ copy. Every effect is captured exactly (glow, gradients, blur).
 `count` caps at 32. `\echo0` disables; `\t` animates all
 parameters. Event-level: the last override block wins for the line.
 
+### `\mgrad(c1,c2[,c3,...])` — multi-stop gradient
+
+Two to eight colour stops in ASS hex order, evenly spaced along the
+active gradient direction: the `\vgrad` angle or `\rgrad` radius
+when set, horizontal otherwise. Piecewise-linear interpolation,
+body channel. `\mgrad0` disables.
+
 ### `\pin(x1,y1,x2,y2,x3,y3,x4,y4)` — corner-pin perspective
 
 Projective (homography) warp that fits the line onto any four-point

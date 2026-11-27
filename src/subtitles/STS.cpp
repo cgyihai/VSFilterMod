@@ -3881,6 +3881,9 @@ bool MOD_GRADIENT::operator == (MOD_GRADIENT& mg)
             && mode[2] == mg.mode[2]
             && mode[3] == mg.mode[3]
             && angleEnabled == mg.angleEnabled
+            && multiEnabled == mg.multiEnabled
+            && multiCount == mg.multiCount
+            && memcmp(&multiColor, &mg.multiColor, sizeof(multiColor)) == 0
             && angle == mg.angle
             && radialEnabled == mg.radialEnabled
             && radialScale == mg.radialScale
@@ -3918,9 +3921,37 @@ void MOD_GRADIENT::clear()
     radialScale = 1;
     radialCx = 0.5;
     radialCy = 0.5;
+    multiEnabled = false;
+    multiCount = 0;
+    memset(&multiColor, 0, sizeof(multiColor));
 }
 
 #include <math.h>
+
+#ifdef _VSMOD // patch m022. multi-stop gradient
+/* Piecewise-linear colour evaluation of n evenly spaced stops at the
+ * normalised position t in [0,1]. Pure IEEE double arithmetic, so the
+ * result is bit-identical across platforms. Stops are stored in the
+ * reverted RGB byte order of the vc corner colours. */
+static inline DWORD EvalMultiStops(const COLORREF* stops, int n, double t)
+{
+    double x = t * (n - 1);
+    if(x < 0) x = 0;
+    if(x > n - 1) x = n - 1;
+    int idx = (int)x;
+    if(idx > n - 2) idx = n - 2;
+    const double f = x - idx;
+    DWORD colora = 0;
+    for(int j = 0; j < 3; j++)
+    {
+        const double cs = (stops[idx] >> (8 * j)) & 0xff;
+        const double ce = (stops[idx + 1] >> (8 * j)) & 0xff;
+        colora |= ((DWORD)(cs * (1 - f) + ce * f) & 0xff) << (8 * j);
+    }
+    return colora;
+}
+#endif
+
 DWORD MOD_GRADIENT::getmixcolor(int tx, int ty, int i) // too slow T.T
 {
     DWORD colorb = 0;
@@ -3958,11 +3989,18 @@ DWORD MOD_GRADIENT::getmixcolor(int tx, int ty, int i) // too slow T.T
             if(t < 0) t = 0;
             if(t > 1) t = 1;
             DWORD colora = 0;
-            for(int j = 0; j < 3; j++)
+            if(multiEnabled && multiCount >= 2 && i == 0)
             {
-                const double cs = (color[i][0] >> (8 * j)) & 0xff;
-                const double ce = (color[i][1] >> (8 * j)) & 0xff;
-                colora |= ((DWORD)(cs * (1 - t) + ce * t) & 0xff) << (8 * j);
+                colora = EvalMultiStops(multiColor, multiCount, t);
+            }
+            else
+            {
+                for(int j = 0; j < 3; j++)
+                {
+                    const double cs = (color[i][0] >> (8 * j)) & 0xff;
+                    const double ce = (color[i][1] >> (8 * j)) & 0xff;
+                    colora |= ((DWORD)(cs * (1 - t) + ce * t) & 0xff) << (8 * j);
+                }
             }
             const DWORD al = (DWORD)(alpha[i][0] * (1 - t) + alpha[i][1] * t) & 0xff;
             colora |= (((0xff - al) * (0xff - fadalpha)) & 0xff00) << 16;
@@ -3972,7 +4010,7 @@ DWORD MOD_GRADIENT::getmixcolor(int tx, int ty, int i) // too slow T.T
         // onto the gradient direction and interpolate between the first two
         // gradient colours (start/end). The projection range comes from the
         // four box corners so the endpoints always land on the extremes.
-        if(angleEnabled && width > 0 && height > 0)
+        if((angleEnabled || multiEnabled) && width > 0 && height > 0)
         {
             const double proj = tx * angleCos + ty * angleSin;
             const double pW = width * angleCos;
@@ -3988,11 +4026,18 @@ DWORD MOD_GRADIENT::getmixcolor(int tx, int ty, int i) // too slow T.T
             if(t < 0) t = 0;
             if(t > 1) t = 1;
             DWORD colora = 0;
-            for(int j = 0; j < 3; j++)
+            if(multiEnabled && multiCount >= 2 && i == 0)
             {
-                const double cs = (color[i][0] >> (8 * j)) & 0xff;
-                const double ce = (color[i][1] >> (8 * j)) & 0xff;
-                colora |= ((DWORD)(cs * (1 - t) + ce * t) & 0xff) << (8 * j);
+                colora = EvalMultiStops(multiColor, multiCount, t);
+            }
+            else
+            {
+                for(int j = 0; j < 3; j++)
+                {
+                    const double cs = (color[i][0] >> (8 * j)) & 0xff;
+                    const double ce = (color[i][1] >> (8 * j)) & 0xff;
+                    colora |= ((DWORD)(cs * (1 - t) + ce * t) & 0xff) << (8 * j);
+                }
             }
             const DWORD al = (DWORD)(alpha[i][0] * (1 - t) + alpha[i][1] * t) & 0xff;
             colora |= (((0xff - al) * (0xff - fadalpha)) & 0xff00) << 16;

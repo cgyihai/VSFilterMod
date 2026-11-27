@@ -1,5 +1,5 @@
 project('vsfiltermod', 'c', 'cpp',
-    version : '1.13.0',
+    version : '1.14.0',
     license : 'GPL-2.0-or-later',
     meson_version : '>=0.59.0',
     default_options : [
@@ -394,6 +394,12 @@ if get_option('tests')
                  args : [files('tests/pin.py'),
                          vsfmrender.full_path(),
                          meson.current_build_dir() / 'pin-test'],
+                 depends : [vsfmrender],
+                 timeout : 120)
+            test('mgrad', py,
+                 args : [files('tests/mgrad.py'),
+                         vsfmrender.full_path(),
+                         meson.current_build_dir() / 'mgrad-test'],
                  depends : [vsfmrender],
                  timeout : 120)
         endif

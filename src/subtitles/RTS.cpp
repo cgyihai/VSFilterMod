@@ -3177,6 +3177,18 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                 }
             }
         }
+        else if(!cmd.Find(L"mgrad"))
+        {
+            if(cmd.GetLength() > 5)
+            {
+                const WCHAR suffixStart = cmd[5];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(5));
+                    cmd = cmd.Left(5);
+                }
+            }
+        }
         else if(!cmd.Find(L"mblur"))
         {
             if(cmd.GetLength() > 5)
@@ -3471,6 +3483,45 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                                                          ? CalcAnimation(vsfm::WcsToL(params[2], NULL, 10), style.mod_grad.b_images[i].yoffset, fAnimate)
                                                          : org.mod_grad.b_images[i].yoffset;
                 }
+            }
+        }
+#endif
+#ifdef _VSMOD // patch m022. multi-stop gradient
+        /* \mgrad(c1,c2[,c3...]): multi-stop gradient colours, 2-8 stops in
+         * ASS hex order (&HBBGGRR), evenly spaced along the active gradient
+         * direction: the vgrad angle or the rgrad radius when one is set,
+         * horizontal otherwise. Applies to the body channel; \mgrad0 or
+         * fewer than two colours disables. Colours are stored in the
+         * reverted RGB byte order of the vc corner colours. */
+        else if(cmd == L"mgrad")
+        {
+            if(params.GetCount() >= 2)
+            {
+                int nstops = 0;
+                COLORREF stops[8];
+                for(int pi = 0; pi < params.GetCount() && nstops < 8; pi++)
+                {
+                    const DWORD c = vsfm::WcsToL(params[pi].Trim(L"&H"), NULL, 16);
+                    stops[nstops++] = ((c & 0xff0000) >> 16) | (c & 0xff00) | ((c & 0xff) << 16);
+                }
+                style.mod_grad.multiCount = nstops;
+                for(int pi = 0; pi < nstops; pi++)
+                    style.mod_grad.multiColor[pi] = stops[pi];
+                style.mod_grad.multiEnabled = nstops >= 2;
+                if(style.mod_grad.multiEnabled)
+                {
+                    if(style.mod_grad.mode[0] == 0)
+                    {
+                        for(int j = 0; j < 4; j++)
+                            style.mod_grad.alpha[0][j] = style.alpha[0];
+                        style.mod_grad.mode[0] = 1;
+                    }
+                }
+            }
+            else
+            {
+                style.mod_grad.multiEnabled = false;
+                style.mod_grad.multiCount = 0;
             }
         }
 #endif

@@ -528,6 +528,11 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "help": "弧形文字；文字沿以圆心为 \\pos 的圆周排列，\\arc0 关闭"
     },
     {
+      "name": "mgrad",
+      "signature": "\\mgrad(c1,c2[,c3,...])",
+      "help": "多色渐变；2-8 个 ASS 十六进制色标沿 vgrad 角度或 rgrad 径向均布，未设置时水平，\\mgrad0 关闭"
+    },
+    {
       "name": "pin",
       "signature": "\\pin(x1,y1,x2,y2,x3,y3,x4,y4)",
       "help": "四角钉扎透视；行布局盒四角（自左上顺时针）映射到输出像素四角点，\\pin0 关闭"
