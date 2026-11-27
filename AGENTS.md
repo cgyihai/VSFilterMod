@@ -49,8 +49,33 @@
 - v1.7.0 / Windows v2.8.0：\vgrad(angle) 任意角度线性渐变
 - v1.8.0 / Windows v2.9.0：\rgrad(scale[,cx,cy]) 径向渐变
 - v1.9.0 / Windows v2.10.0：\matte/\imatte 轨道遮罩
+- v1.10.0 / Windows v2.11.0：\arc(radius[,angle]) 弧形文字
+- v1.11.0 / Windows v2.12.0：\wave(amp,freq[,phase]) 正弦波浪文字
+- v1.12.0 / Windows v2.13.0：\extrude(depth[,angle]) 立体挤出、\echo(count,dx,dy[,falloff]) 残影拖尾
 
-测试：tests/fxpackage.py + vgrad.py + rgrad.py + matte.py；meson test 16 通过 1 跳过。
+测试：tests/fxpackage.py + vgrad.py + rgrad.py + matte.py + arc.py + wave.py +
+extrude.py + echo.py；meson test 20 通过 1 跳过。
+
+剩余候选（未做，按优先级）：
+1. \pin(x1,y1,...,x4,y4) 四角钉扎真透视——招牌贴合终极武器。已分析未实施：
+   需要线级包围盒穿透到逐词 Transform 的管线（词样式拷贝行 bbox 可行），
+   单应矩阵求解+透视除法；遗留 \distort 是三点双线性且无投影除法、坐标
+   还是 bbox 相对值，不能替代。工程量最大，需专用会话。
+2. 多色渐变（vc 扩展色标）。
+3. \shadblur/\bordblur 分层羽化——阴影/描边独立模糊，需分离光栅化。
+4. 混合模式（加算/屏幕）——CSRI/子图合成 ABI 限制，工程量最大。
+5. 真透视 3D——\pin 落地后难度减半。
+
+特效实现要点（arc/wave/extrude/echo 共性）：
+- arc/wave 逐字符拆分：ParseString 按码点切分（代理对保持完整），
+  CWord::Append 在 arc/wave 激活时拒绝合并（Compact 会重并同样式词）。
+- 旋转 Pivot 必须跟随位移，否则字形绕陈旧枢轴甩飞。
+- extrude 是 shadow pass 纯 Draw 重入（光栅化缓存复用，无重复变换）；
+  阴影深度为零时须跳过零偏移阴影绘制，否则抗锯齿边缘被阴影色污染。
+- echo 走事件级离屏捕获（matte 的 tspd 重定向基建），CompositeEchoCanvas
+  预乘 alpha 均匀缩放+整数偏移合成；matte 消费优先于 echo。
+- CWord::Paint 非重入（m_fDrawn 缓存变换）；整数偏移副本只能 Draw 重入，
+  亚像素偏移副本会有相位误差（extrude/echo 均整数化）。
 
 剩余候选（未做）：混合模式（加算）、真透视 3D。
 
