@@ -223,6 +223,14 @@ public:
     double m_clipFeather;
     bool m_clipExplicit;
 #endif
+#ifdef _VSMOD // patch m016. track matte
+    /* 0 = normal event, 1 = hidden alpha matte, 2 = hidden inverse alpha matte.
+     * A matte event renders into a per-layer offscreen canvas instead of the
+     * frame; its opacity silhouette is captured as the matte coverage for
+     * events on layer (matte layer + m_matteOffset). */
+    int m_matteMode;
+    int m_matteOffset;
+#endif
 
     double m_scalex, m_scaley;
 

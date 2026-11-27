@@ -8,7 +8,7 @@
 
 - Added the \rgb subtitle override tag: chromatic aberration that shifts the
   red and blue channels of the sentence in opposite directions. \rgb4 and
-  \rgb(4) are equivalent, 	 animation is supported and \rgb0 disables it.
+  \rgb(4) are equivalent, \t animation is supported and \rgb0 disables it.
 
 - Added the \glow subtitle override tag. \glow20 and \glow(20) draw a
   primary-colour halo with a radius of 20 output pixels; \glow(20,1.5) also
@@ -46,6 +46,17 @@
   supported, and \vgrad/\rgrad are mutually exclusive with the later tag
   winning. Regression suite tests/rgrad.py verifies the centre/edge falloff,
   scale, centre orientation, syntax equivalence, mode exclusion and reset.
+
+### Track matte
+
+- \matte[offset] / \imatte[offset]: the tagged event becomes a hidden alpha
+  matte whose rendered silhouette (shadow, outline and body) masks events on
+  layer (matte layer + offset, default 1), After Effects style. Matted events
+  paint into an offscreen canvas and composite into the frame modulated
+  per-pixel by the matte coverage, so every effect - glow, gradients, motion
+  blur - stays inside the mask. \imatte inverts the mask; several matte
+  events on one layer union into a single mask; \matte0 disables.
+  Regression suite tests/matte.py.
 
 ### Effect package
 

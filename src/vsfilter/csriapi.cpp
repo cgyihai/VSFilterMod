@@ -513,6 +513,16 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "help": "斜面浮雕；\\bevel2 是尺寸 2 的简写"
     },
     {
+      "name": "matte",
+      "signature": "\\matte[offset]",
+      "help": "轨道遮罩；事件隐藏并作为 layer+offset 层的剪影遮罩，默认 +1"
+    },
+    {
+      "name": "imatte",
+      "signature": "\\imatte[offset]",
+      "help": "反向轨道遮罩；遮罩外部可见"
+    },
+    {
       "name": "clipf",
       "signature": "\\clipf(radius)",
       "help": "羽化裁剪；\\clipf15 柔化矩形/矢量裁剪边缘"

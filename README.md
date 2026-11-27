@@ -193,6 +193,31 @@ box corner; cx/cy are the centre as a UV fraction of the box in screen
 orientation and default to the box centre. The regression suites
 tests/vgrad.py and tests/rgrad.py pin the semantics.
 
+### Track mattes (\matte, \imatte)
+
+A track matte uses one event's silhouette to mask events on a layer above it,
+After Effects style. The matte event itself is hidden; events on the target
+layer render fully - body, outline, shadow, glow and every post-effect - but
+only where the matte is opaque:
+
+```ass
+Dialogue: 0,...,{\pos(320,180)}TEXT        visible base layer
+Dialogue: 1,...,{\pos(320,180)\matte}TEXT  hidden matte copy, masks layer 2
+Dialogue: 2,...,{\pos(320,180)\1vc(...)\rgrad1}WWWWW  gradient shows inside TEXT only
+```
+
+- `\matte` / `\matte1` / `\matte(1)` masks events on layer+1; `\matte2`
+  reaches layer+2 for sparse layer numbering; `\matte0` disables.
+- `\imatte` inverts: the effect shows everywhere except inside the matte.
+- Several matte events on one layer union into a single mask.
+- The mask is the matte's rendered silhouette (shadow, outline and body
+  included); a blur or glow on the matte softens the mask edge accordingly.
+- Everything animates per frame as usual, so moving or \t-transformed mattes
+  and effects stay in sync.
+
+The regression suite tests/matte.py pins containment, inversion, layer
+offsets, hiding and the syntax variants.
+
 ### RGB split (\rgb)
 
 The \rgb tag shifts the red and blue channels of the text in opposite
@@ -204,7 +229,7 @@ directions, a chromatic-aberration / glitch effect. These forms are equivalent:
 ```
 
 The distance is measured in output pixels, may be negative to swap the fringe
-directions, supports 	 animation, is capped at 4096 and disabled by \rgb0.
+directions, supports \t animation, is capped at 4096 and disabled by \rgb0.
 The split applies to the whole sentence; when words disagree the largest
 magnitude wins.
 

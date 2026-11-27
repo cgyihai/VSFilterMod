@@ -37,10 +37,11 @@
   动态模糊、\bevel(size[,strength]) 平滑浮雕、\clipf(radius) 羽化裁剪（矩形/矢量/反向）
 - v1.7.0 / Windows v2.8.0：\vgrad(angle) 任意角度线性渐变
 - v1.8.0 / Windows v2.9.0：\rgrad(scale[,cx,cy]) 径向渐变
+- v1.9.0 / Windows v2.10.0：\matte/\imatte 轨道遮罩
 
-测试：tests/fxpackage.py + vgrad.py + rgrad.py；meson test 15 通过 1 跳过。
+测试：tests/fxpackage.py + vgrad.py + rgrad.py + matte.py；meson test 16 通过 1 跳过。
 
-剩余候选（未做）：混合模式（加算）、真透视 3D、轨道遮罩。
+剩余候选（未做）：混合模式（加算）、真透视 3D。
 
 移植注意：Windows 树用 wcstod/wcstol/cos/sin/pow 替代 vsfm::WcsTo*/Det*；
 提取跨平台补丁块时注意注释标记歧义（"patch m014. inner glow" 在解析器
@@ -71,7 +72,38 @@ edit/write 工具直写，或 python 里用 chr(92) 拼接。写完用控制字�
 其他候选史诗（均未做，各需完整会话）：
 - 混合模式（加算/屏幕）——需改 CSRI/子图合成架构，工程量最大
 - 真透视 3D（\frx\fry 目前是正交近似）——研究级
-- 轨道遮罩——语法设计+实现都复杂
+
+## 轨道遮罩实现要点（matte/imatte，patch m016，改遮罩前必读）
+
+语义：`\matte[N]`/`\imatte[N]` 把事件标记为隐藏遮罩源，遮罩 layer+N（默认+1）
+层上的事件；0 关闭。事件级标志存在 `CSubtitle::m_matteMode/m_matteOffset`
+（不是样式属性，不支持 \t 动画；事件内容本身照常动画）。
+
+架构核心——**tspd/tbbox 重定向**（RTS.cpp Render 循环）：
+- 事件绘制全部参数化经过 spd（PaintShadow/Outline/Body、辉光/内辉光合成、
+  bevel/mblur/rgb 后处理都读写 spd）。循环开头 `SubPicDesc tspd = spd` 是
+  结构体拷贝，matte/被遮罩事件只改 `tspd.bits/tspd.pitch` 指向离屏画布；
+  尺寸完全相同所以一切维度读取不受影响，正常路径位完全一致（render-consistency 证实）。
+- `CRect& tbbox` 三元引用：重定向事件用局部 localBBox，正常事件别名共享 bbox2
+  （保留跨事件累积的历史语义，后处理区域依赖它，不能"修正"）。
+- **循环体内 spd/bbox2 已全部机械替换为 tspd/tbbox**；新增使用帧缓冲的代码
+  必须用 tspd/tbbox。警告：`\bspd\b` 正则替换会误伤 `mod_vc.spd` 成员访问，
+  移植时手工恢复过一处。
+- matte 事件：绘制进按层共享的持久画布（matteLayers map），每次事件后重新
+  提取覆盖率（提取是画布状态的纯函数，同层多事件自然并集）。自身不可见。
+- 被遮罩事件：绘制进 per-event 临时画布，结束后 `CompositeMattedCanvas`
+  按 6-bit 覆盖率逐像素调制合成进真帧。合成是预乘 alpha 的 over：
+  蒙版同时缩放 rgb 贡献与不透明度（预乘下保色）；反转 alpha 通道乘法累积。
+- 层序：LSub 升序自底向上单遍迭代，matte 在低位层先绘制，target=layer+N
+  （N>=1）保证先产后用——**负/零 offset 会破坏时序所以解析时钳掉**；
+  无需预扫描（AllocRect 有副作用不能重复调用）。
+- 覆盖率提取：反转 alpha 画布 opacity=(0xff-alphaByte)，cov=(opacity+2)>>2
+   cap 64；inverse 存 64-cov。格式与矢量 clip 蒙版一致。
+- 为何不复用 pAlphaMask 蒙版通道：glow 等后处理绕过蒙版合成，只有离屏
+  画布+调制合成能正确捕获事件全部输出。
+- `\imatte` 前缀链必须置于 `\i`（斜体）分支之前；`\matte` 与 move/mover/mblur
+  无前缀冲突。测试陷阱：文本默认带黑色描边，效果事件的描边会出现在遮罩内
+  （正确行为）；反向遮罩的洞里会透出下层基底——写断言前先想几何。
 
 ## 旧版路线图存档
 （用户已批准，按序逐个实现）

@@ -26,6 +26,7 @@
 #include <math.h>
 #include <time.h>
 #include <algorithm>
+#include <map>
 #include <vector>
 #include "RTS.h"
 
@@ -92,6 +93,68 @@ struct GlowCanvas
         }
     }
 };
+
+#ifdef _VSMOD // patch m016. track matte
+/* Extract 6-bit coverage (0..64) from an inverted-alpha canvas, matching the
+ * vector clip mask format so the matte can modulate per-pixel like any other
+ * coverage source. Inverse mattes flip the coverage. */
+static void ExtractMatteCoverage(const std::vector<unsigned int>& pixels, std::vector<BYTE>& coverage, bool inverse)
+{
+    const size_t n = pixels.size();
+    coverage.resize(n);
+    for(size_t i = 0; i < n; i++)
+    {
+        const unsigned int opacity = 0xff - (pixels[i] >> 24);
+        unsigned int cov = (opacity + 2) >> 2;
+        if(cov > 64) cov = 64;
+        coverage[i] = (BYTE)(inverse ? 64 - cov : cov);
+    }
+}
+
+/* Composite a matted event's offscreen canvas into the real frame, modulated
+ * by the matte coverage. Both buffers are inverted-alpha premultiplied; the
+ * matte scales both the color contribution and the coverage of each pixel,
+ * which preserves the color ratio exactly for premultiplied content.
+ * Clamped to bbox (the event's painted region) and the frame. */
+static void CompositeMattedCanvas(const std::vector<unsigned int>& scratch, const std::vector<BYTE>& coverage,
+                                  SubPicDesc& spd, const CRect& bbox)
+{
+    if(bbox.IsRectEmpty()) return;
+    const int left = (std::max)(0, (int)bbox.left);
+    const int top = (std::max)(0, (int)bbox.top);
+    const int right = (std::min)((int)spd.w, (int)bbox.right);
+    const int bottom = (std::min)((int)spd.h, (int)bbox.bottom);
+    for(int y = top; y < bottom; y++)
+    {
+        const unsigned int* srow = &scratch[(size_t)y * spd.w];
+        const BYTE* crow = &coverage[(size_t)y * spd.w];
+        unsigned int* drow = (unsigned int*)((BYTE*)spd.bits + y * spd.pitch);
+        for(int x = left; x < right; x++)
+        {
+            const unsigned int spx = srow[x];
+            const unsigned int opacity = 0xff - (spx >> 24);
+            if(!opacity) continue;
+            const unsigned int scale = crow[x];
+            if(!scale) continue;
+            const unsigned int sopacity = (opacity * scale + 32) >> 6;
+            if(!sopacity) continue;
+            const unsigned int sb = ((spx & 0xff) * scale + 32) >> 6;
+            const unsigned int sg = (((spx >> 8) & 0xff) * scale + 32) >> 6;
+            const unsigned int sr = (((spx >> 16) & 0xff) * scale + 32) >> 6;
+            const unsigned int inv = 255 - sopacity;
+            const unsigned int dpx = drow[x];
+            unsigned int db = sb + ((dpx & 0xff) * inv + 127) / 255;
+            unsigned int dg = sg + (((dpx >> 8) & 0xff) * inv + 127) / 255;
+            unsigned int dr = sr + (((dpx >> 16) & 0xff) * inv + 127) / 255;
+            unsigned int da = ((dpx >> 24) * inv + 127) / 255;
+            if(db > 255) db = 255;
+            if(dg > 255) dg = 255;
+            if(dr > 255) dr = 255;
+            drow[x] = db | (dg << 8) | (dr << 16) | (da << 24);
+        }
+    }
+}
+#endif
 
 /* Bloom-style emission plane in 16-bit premultiplied BGRA. Gaussian
  * approximations at three radii are accumulated additively: a hot tight
@@ -1887,6 +1950,10 @@ CSubtitle::CSubtitle()
     m_clipFeather = 0;
     m_clipExplicit = false;
 #endif
+#ifdef _VSMOD // patch m016. track matte
+    m_matteMode = 0;
+    m_matteOffset = 1;
+#endif
     m_scalex = m_scaley = 1;
 }
 
@@ -2694,6 +2761,34 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                 }
             }
         }
+        else if(!cmd.Find(L"imatte"))
+        {
+            /* integer layer-offset suffix, same convention as matte below */
+            if(cmd.GetLength() > 6)
+            {
+                const WCHAR suffixStart = cmd[6];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '+' || suffixStart == '-')
+                {
+                    params.Add(cmd.Mid(6));
+                    cmd = cmd.Left(6);
+                }
+            }
+        }
+#endif
+#ifdef _VSMOD // patch m016. track matte: no conflicting prefix among the
+               // m-tags (move/mover/mblur), placed near them for tidiness
+        else if(!cmd.Find(L"matte"))
+        {
+            if(cmd.GetLength() > 5)
+            {
+                const WCHAR suffixStart = cmd[5];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '+' || suffixStart == '-')
+                {
+                    params.Add(cmd.Mid(5));
+                    cmd = cmd.Left(5);
+                }
+            }
+        }
 #endif
         else if(!cmd.Find(L"i"))
             params.Add(cmd.Mid(1)), cmd = cmd.Left(1);
@@ -3186,6 +3281,35 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
 #endif
             }
         }
+#ifdef _VSMOD // patch m016. track matte
+        /* Event-level visibility flag, not a style property: the tag marks the
+         * whole event as a hidden alpha matte whose silhouette masks events on
+         * layer (matte layer + offset). No animation support. */
+        else if(cmd == L"matte" || cmd == L"imatte")
+        {
+            const int mode = (cmd == L"imatte") ? 2 : 1;
+            if(params.GetCount() > 0)
+            {
+                int n = vsfm::WcsToL(params[0], NULL, 10);
+                if(n > 64) n = 64;
+                if(n <= 0)
+                {
+                    sub->m_matteMode = 0;
+                    sub->m_matteOffset = 1;
+                }
+                else
+                {
+                    sub->m_matteMode = mode;
+                    sub->m_matteOffset = n;
+                }
+            }
+            else
+            {
+                sub->m_matteMode = mode;
+                sub->m_matteOffset = 1;
+            }
+        }
+#endif
         else if(cmd == L"c")
         {
             DWORD c = vsfm::WcsToL(p, NULL, 16);
@@ -4331,6 +4455,23 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 {
     CRect bbox2(0, 0, 0, 0);
 
+#ifdef _VSMOD // patch m016. track matte
+    /* Per-frame matte state, keyed by the matte events' layer. Matte events
+     * render into a shared per-layer canvas; after each matte event the
+     * coverage is re-extracted so events on the target layer (matte layer +
+     * offset, always above, hence already processed in this bottom-to-top
+     * pass) can consume it. */
+    struct MatteLayerState
+    {
+        bool inverse = false;
+        int targetOffset = 1;
+        bool hasCoverage = false;
+        std::vector<unsigned int> pixels;
+        std::vector<BYTE> coverage;
+    };
+    std::map<int, MatteLayerState> matteLayers;
+#endif
+
     if(m_size != CSize(spd.w * 8, spd.h * 8) || m_vidrect != CRect(spd.vidrect.left * 8, spd.vidrect.top * 8, spd.vidrect.right * 8, spd.vidrect.bottom * 8))
         Init(CSize(spd.w, spd.h), spd.vidrect);
 
@@ -4391,6 +4532,55 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
         CSubtitle* s = GetSubtitle(entry);
         if(!s) continue;
 
+        /* patch m016. track matte: redirect all painting of matte/matted
+         * events into offscreen canvases. tspd starts as a copy of the frame
+         * descriptor (identical dimensions); for redirected events only the
+         * pixel pointer and pitch change, so every dimension read below is
+         * unaffected and the normal path is bit-identical. tbbox likewise
+         * aliases the shared bbox2 unless redirected. */
+        SubPicDesc tspd = spd;
+        CRect localBBox(0, 0, 0, 0);
+        CRect* ptbbox = &bbox2;
+#ifdef _VSMOD
+        const bool isMatteEvent = (s->m_matteMode != 0);
+        const MatteLayerState* consumeMatte = NULL;
+        MatteLayerState* myMatteState = NULL;
+        std::vector<unsigned int> evtPixels;
+        if(isMatteEvent)
+        {
+            MatteLayerState& ms = matteLayers[subs[i].layer];
+            if(ms.pixels.empty())
+            {
+                ms.pixels.assign((size_t)spd.w * spd.h, 0xff000000);
+                ms.inverse = (s->m_matteMode == 2);
+                ms.targetOffset = s->m_matteOffset;
+            }
+            myMatteState = &ms;
+            tspd.bits = (BYTE*)ms.pixels.data();
+            tspd.pitch = spd.w * 4;
+            ptbbox = &localBBox;
+        }
+        else
+        {
+            for(std::map<int, MatteLayerState>::const_reverse_iterator it = matteLayers.rbegin(); it != matteLayers.rend(); ++it)
+            {
+                if(it->second.hasCoverage && it->first + it->second.targetOffset == subs[i].layer)
+                {
+                    consumeMatte = &it->second;
+                    break; /* highest matte layer below wins */
+                }
+            }
+            if(consumeMatte)
+            {
+                evtPixels.assign((size_t)spd.w * spd.h, 0xff000000);
+                tspd.bits = (BYTE*)evtPixels.data();
+                tspd.pitch = spd.w * 4;
+                ptbbox = &localBBox;
+            }
+        }
+#endif
+        CRect& tbbox = *ptbbox;
+
         CRect clipRect = s->m_clip;
         CRect r = s->m_rect;
         CSize spaceNeeded = r.Size();
@@ -4407,7 +4597,7 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 
 #ifdef _VSMOD // patch m006. moveable vector clip
         MOD_MOVEVC mod_vc;
-        mod_vc.spd = CSize(spd.w, spd.h);
+        mod_vc.spd = CSize(tspd.w, tspd.h);
         //mod_vc.alphamask = pAlphaMask;
         mod_vc.size = s->m_pClipper ? s->m_pClipper->m_size : CSize(0, 0);
 #endif
@@ -4663,7 +4853,7 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 
                 r.bottom = r.top + spaceNeeded.cy;
 
-                CRect cr(0, (s->m_effects[k]->param[0] + 4) >> 3, spd.w, (s->m_effects[k]->param[1] + 4) >> 3);
+                CRect cr(0, (s->m_effects[k]->param[0] + 4) >> 3, tspd.w, (s->m_effects[k]->param[1] + 4) >> 3);
 
                 if(s->m_relativeTo == 1)
                     r.top += m_vidrect.top,
@@ -4755,10 +4945,10 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 
         // Rectangles for inverse clip
         CRect iclipRect[4];
-        iclipRect[0] = CRect(0, 0, spd.w, clipRect.top);
+        iclipRect[0] = CRect(0, 0, tspd.w, clipRect.top);
         iclipRect[1] = CRect(0, clipRect.top, clipRect.left, clipRect.bottom);
-        iclipRect[2] = CRect(clipRect.right, clipRect.top, spd.w, clipRect.bottom);
-        iclipRect[3] = CRect(0, clipRect.bottom, spd.w, spd.h);
+        iclipRect[2] = CRect(clipRect.right, clipRect.top, tspd.w, clipRect.bottom);
+        iclipRect[3] = CRect(0, clipRect.bottom, tspd.w, tspd.h);
 
 #ifdef _VSMOD // patch m012. glow
         std::vector<GlowPass> glowPasses;
@@ -4767,8 +4957,8 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
         {
             const int glowRadius = glowIt->radius;
             const int glowStrengthQ8 = glowIt->strengthQ8;
-            const int blurRadius = (std::min)(glowRadius, (std::max)(spd.w, spd.h));
-            GlowCanvas glowCanvas(spd.w, spd.h);
+            const int blurRadius = (std::min)(glowRadius, (std::max)(tspd.w, tspd.h));
+            GlowCanvas glowCanvas(tspd.w, tspd.h);
             CRect glowSourceBBox(0, 0, 0, 0);
 
             const auto paintGlowSource = [&](CRect& sourceClipRect)
@@ -4810,8 +5000,8 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
                            glowSourceBBox.right + blurRadius + 1, glowSourceBBox.bottom + blurRadius + 1);
             if(glowRect.left < 0) glowRect.left = 0;
             if(glowRect.top < 0) glowRect.top = 0;
-            if(glowRect.right > spd.w) glowRect.right = spd.w;
-            if(glowRect.bottom > spd.h) glowRect.bottom = spd.h;
+            if(glowRect.right > tspd.w) glowRect.right = tspd.w;
+            if(glowRect.bottom > tspd.h) glowRect.bottom = tspd.h;
             if(glowRect.IsRectEmpty()) continue;
 
             GlowPlane16 plane;
@@ -4861,8 +5051,8 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
                     const CRect compositeRect = IntersectGlowRect(glowRect, iclipRect[iclip]);
                     if(!compositeRect.IsRectEmpty())
                     {
-                        CompositeGlowPlane(plane, spd, compositeRect, 256, pAlphaMask, mod_vc);
-                        bbox2 |= compositeRect;
+                        CompositeGlowPlane(plane, tspd, compositeRect, 256, pAlphaMask, mod_vc);
+                        tbbox |= compositeRect;
                     }
                 }
             }
@@ -4871,8 +5061,8 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
                 const CRect compositeRect = IntersectGlowRect(glowRect, clipRect);
                 if(!compositeRect.IsRectEmpty())
                 {
-                    CompositeGlowPlane(plane, spd, compositeRect, 256, pAlphaMask, mod_vc);
-                    bbox2 |= compositeRect;
+                    CompositeGlowPlane(plane, tspd, compositeRect, 256, pAlphaMask, mod_vc);
+                    tbbox |= compositeRect;
                 }
             }
         }
@@ -4892,26 +5082,26 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 #ifdef _VSMOD // patch m006. moveable vector clip
             if(s->m_clipInverse)
             {
-                bbox2 |= l->PaintShadow(spd, iclipRect[0], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
-                bbox2 |= l->PaintShadow(spd, iclipRect[1], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
-                bbox2 |= l->PaintShadow(spd, iclipRect[2], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
-                bbox2 |= l->PaintShadow(spd, iclipRect[3], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintShadow(tspd, iclipRect[0], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintShadow(tspd, iclipRect[1], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintShadow(tspd, iclipRect[2], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintShadow(tspd, iclipRect[3], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
             }
             else
             {
-                bbox2 |= l->PaintShadow(spd, clipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintShadow(tspd, clipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
             }
 #else
             if(s->m_clipInverse)
             {
-                bbox2 |= l->PaintShadow(spd, iclipRect[0], pAlphaMask, p, org2, m_time, alpha);
-                bbox2 |= l->PaintShadow(spd, iclipRect[1], pAlphaMask, p, org2, m_time, alpha);
-                bbox2 |= l->PaintShadow(spd, iclipRect[2], pAlphaMask, p, org2, m_time, alpha);
-                bbox2 |= l->PaintShadow(spd, iclipRect[3], pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintShadow(tspd, iclipRect[0], pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintShadow(tspd, iclipRect[1], pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintShadow(tspd, iclipRect[2], pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintShadow(tspd, iclipRect[3], pAlphaMask, p, org2, m_time, alpha);
             }
             else
             {
-                bbox2 |= l->PaintShadow(spd, clipRect, pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintShadow(tspd, clipRect, pAlphaMask, p, org2, m_time, alpha);
             }
 #endif
             p.y += l->m_ascent + l->m_descent;
@@ -4931,26 +5121,26 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 #ifdef _VSMOD // patch m006. moveable vector clip
             if(s->m_clipInverse)
             {
-                bbox2 |= l->PaintOutline(spd, iclipRect[0], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
-                bbox2 |= l->PaintOutline(spd, iclipRect[1], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
-                bbox2 |= l->PaintOutline(spd, iclipRect[2], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
-                bbox2 |= l->PaintOutline(spd, iclipRect[3], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintOutline(tspd, iclipRect[0], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintOutline(tspd, iclipRect[1], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintOutline(tspd, iclipRect[2], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintOutline(tspd, iclipRect[3], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
             }
             else
             {
-                bbox2 |= l->PaintOutline(spd, clipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintOutline(tspd, clipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
             }
 #else
             if(s->m_clipInverse)
             {
-                bbox2 |= l->PaintOutline(spd, iclipRect[0], pAlphaMask, p, org2, m_time, alpha);
-                bbox2 |= l->PaintOutline(spd, iclipRect[1], pAlphaMask, p, org2, m_time, alpha);
-                bbox2 |= l->PaintOutline(spd, iclipRect[2], pAlphaMask, p, org2, m_time, alpha);
-                bbox2 |= l->PaintOutline(spd, iclipRect[3], pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintOutline(tspd, iclipRect[0], pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintOutline(tspd, iclipRect[1], pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintOutline(tspd, iclipRect[2], pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintOutline(tspd, iclipRect[3], pAlphaMask, p, org2, m_time, alpha);
             }
             else
             {
-                bbox2 |= l->PaintOutline(spd, clipRect, pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintOutline(tspd, clipRect, pAlphaMask, p, org2, m_time, alpha);
             }
 #endif
             p.y += l->m_ascent + l->m_descent;
@@ -4970,26 +5160,26 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 #ifdef _VSMOD // patch m006. moveable vector clip
             if(s->m_clipInverse)
             {
-                bbox2 |= l->PaintBody(spd, iclipRect[0], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
-                bbox2 |= l->PaintBody(spd, iclipRect[1], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
-                bbox2 |= l->PaintBody(spd, iclipRect[2], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
-                bbox2 |= l->PaintBody(spd, iclipRect[3], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintBody(tspd, iclipRect[0], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintBody(tspd, iclipRect[1], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintBody(tspd, iclipRect[2], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintBody(tspd, iclipRect[3], pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
             }
             else
             {
-                bbox2 |= l->PaintBody(spd, clipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
+                tbbox |= l->PaintBody(tspd, clipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt);
             }
 #else
             if(s->m_clipInverse)
             {
-                bbox2 |= l->PaintBody(spd, iclipRect[0], pAlphaMask, p, org2, m_time, alpha);
-                bbox2 |= l->PaintBody(spd, iclipRect[1], pAlphaMask, p, org2, m_time, alpha);
-                bbox2 |= l->PaintBody(spd, iclipRect[2], pAlphaMask, p, org2, m_time, alpha);
-                bbox2 |= l->PaintBody(spd, iclipRect[3], pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintBody(tspd, iclipRect[0], pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintBody(tspd, iclipRect[1], pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintBody(tspd, iclipRect[2], pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintBody(tspd, iclipRect[3], pAlphaMask, p, org2, m_time, alpha);
             }
             else
             {
-                bbox2 |= l->PaintBody(spd, clipRect, pAlphaMask, p, org2, m_time, alpha);
+                tbbox |= l->PaintBody(tspd, clipRect, pAlphaMask, p, org2, m_time, alpha);
             }
 #endif
             p.y += l->m_ascent + l->m_descent;
@@ -5005,7 +5195,7 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
         for(size_t ip = 0; ip < iglowPasses.size(); ip++)
         {
             const IGlowPass& pass = iglowPasses[ip];
-            GlowCanvas iglowCanvas(spd.w, spd.h);
+            GlowCanvas iglowCanvas(tspd.w, tspd.h);
             CRect iglowCoverageBox(0, 0, 0, 0);
 
             const auto paintIGlowSource = [&](CRect& sourceClipRect)
@@ -5038,7 +5228,7 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 
             if(iglowCoverageBox.IsRectEmpty()) continue;
 
-            const int blurRadius = (std::min)(pass.radius, (std::max)(spd.w, spd.h));
+            const int blurRadius = (std::min)(pass.radius, (std::max)(tspd.w, tspd.h));
             /* The blur support must stay inside the region of interest for
              * every covered pixel, otherwise the zero padding beyond it would
              * darken the edge light. */
@@ -5046,8 +5236,8 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
                             iglowCoverageBox.right + blurRadius + 1, iglowCoverageBox.bottom + blurRadius + 1);
             if(iglowRect.left < 0) iglowRect.left = 0;
             if(iglowRect.top < 0) iglowRect.top = 0;
-            if(iglowRect.right > spd.w) iglowRect.right = spd.w;
-            if(iglowRect.bottom > spd.h) iglowRect.bottom = spd.h;
+            if(iglowRect.right > tspd.w) iglowRect.right = tspd.w;
+            if(iglowRect.bottom > tspd.h) iglowRect.bottom = tspd.h;
             if(iglowRect.IsRectEmpty()) continue;
 
             GlowPlane16 plane;
@@ -5062,14 +5252,14 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
                 {
                     const CRect compositeRect = IntersectGlowRect(iglowCoverageBox, iclipRect[iclip]);
                     if(!compositeRect.IsRectEmpty())
-                        CompositeInnerGlowPlane(plane, iglowCanvas, spd, compositeRect, pass.strengthQ8, pass.color, pass.alphaKey, pAlphaMask, mod_vc);
+                        CompositeInnerGlowPlane(plane, iglowCanvas, tspd, compositeRect, pass.strengthQ8, pass.color, pass.alphaKey, pAlphaMask, mod_vc);
                 }
             }
             else
             {
                 const CRect compositeRect = IntersectGlowRect(iglowCoverageBox, clipRect);
                 if(!compositeRect.IsRectEmpty())
-                    CompositeInnerGlowPlane(plane, iglowCanvas, spd, compositeRect, pass.strengthQ8, pass.color, pass.alphaKey, pAlphaMask, mod_vc);
+                    CompositeInnerGlowPlane(plane, iglowCanvas, tspd, compositeRect, pass.strengthQ8, pass.color, pass.alphaKey, pAlphaMask, mod_vc);
             }
         }
 
@@ -5102,25 +5292,25 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
                 }
             }
         }
-        if(bevelSize > 0 && !bbox2.IsRectEmpty())
+        if(bevelSize > 0 && !tbbox.IsRectEmpty())
         {
-            ApplyBevel(spd, bbox2, (int)(bevelSize + 0.5), (int)(bevelStrength * 256 + 0.5));
+            ApplyBevel(tspd, tbbox, (int)(bevelSize + 0.5), (int)(bevelStrength * 256 + 0.5));
         }
-        if(mblurLength > 0 && !bbox2.IsRectEmpty())
+        if(mblurLength > 0 && !tbbox.IsRectEmpty())
         {
-            ApplyMotionBlur(spd, bbox2, mblurLength, mblurAngle);
+            ApplyMotionBlur(tspd, tbbox, mblurLength, mblurAngle);
             /* the smear spreads the content box along the blur direction */
             const double mrad = mblurAngle * (3.14159265358979323846 / 180.0);
             const int mex = (int)(fabs(vsfm::DetCos(mrad)) * mblurLength / 2 + 1.5);
             const int mey = (int)(fabs(vsfm::DetSin(mrad)) * mblurLength / 2 + 1.5);
-            bbox2.left -= mex;
-            bbox2.right += mex;
-            bbox2.top -= mey;
-            bbox2.bottom += mey;
-            if(bbox2.left < 0) bbox2.left = 0;
-            if(bbox2.top < 0) bbox2.top = 0;
-            if(bbox2.right > spd.w) bbox2.right = spd.w;
-            if(bbox2.bottom > spd.h) bbox2.bottom = spd.h;
+            tbbox.left -= mex;
+            tbbox.right += mex;
+            tbbox.top -= mey;
+            tbbox.bottom += mey;
+            if(tbbox.left < 0) tbbox.left = 0;
+            if(tbbox.top < 0) tbbox.top = 0;
+            if(tbbox.right > tspd.w) tbbox.right = tspd.w;
+            if(tbbox.bottom > tspd.h) tbbox.bottom = tspd.h;
         }
 #endif
 
@@ -5145,13 +5335,13 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
         int rgbShift = (int)(rgbSplit >= 0 ? rgbSplit + 0.5 : rgbSplit - 0.5);
         if(rgbShift > 4096) rgbShift = 4096;
         else if(rgbShift < -4096) rgbShift = -4096;
-        if(rgbShift && !bbox2.IsRectEmpty())
+        if(rgbShift && !tbbox.IsRectEmpty())
         {
             const int ad = rgbShift < 0 ? -rgbShift : rgbShift;
-            CRect rr(bbox2.left - ad, bbox2.top, bbox2.right + ad, bbox2.bottom);
+            CRect rr(tbbox.left - ad, tbbox.top, tbbox.right + ad, tbbox.bottom);
             if(rr.left < 0) rr.left = 0;
-            if(rr.right > spd.w) rr.right = spd.w;
-            if(rr.bottom > spd.h) rr.bottom = spd.h;
+            if(rr.right > tspd.w) rr.right = tspd.w;
+            if(rr.bottom > tspd.h) rr.bottom = tspd.h;
             if(rr.top < 0) rr.top = 0;
             const int rw = rr.right - rr.left;
             const int rh = rr.bottom - rr.top;
@@ -5160,12 +5350,12 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
                 std::vector<unsigned int> backup((size_t)rw * rh);
                 for(int y = 0; y < rh; y++)
                 {
-                    const unsigned int* srow = (const unsigned int*)((const BYTE*)spd.bits + (rr.top + y) * spd.pitch) + rr.left;
+                    const unsigned int* srow = (const unsigned int*)((const BYTE*)tspd.bits + (rr.top + y) * tspd.pitch) + rr.left;
                     memcpy(&backup[(size_t)y * rw], srow, rw * 4);
                 }
                 for(int y = 0; y < rh; y++)
                 {
-                    unsigned int* drow = (unsigned int*)((BYTE*)spd.bits + (rr.top + y) * spd.pitch) + rr.left;
+                    unsigned int* drow = (unsigned int*)((BYTE*)tspd.bits + (rr.top + y) * tspd.pitch) + rr.left;
                     for(int x = 0; x < rw; x++)
                     {
                         /* BGRA byte order: blue=0, green=1, red=2, alpha=3.
@@ -5183,10 +5373,10 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
                         drow[x] = px;
                     }
                 }
-                bbox2.left -= ad;
-                bbox2.right += ad;
-                if(bbox2.left < 0) bbox2.left = 0;
-                if(bbox2.right > spd.w) bbox2.right = spd.w;
+                tbbox.left -= ad;
+                tbbox.right += ad;
+                if(tbbox.left < 0) tbbox.left = 0;
+                if(tbbox.right > tspd.w) tbbox.right = tspd.w;
             }
         }
 #endif
@@ -5195,7 +5385,28 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
         /* Last of the post-effects: the feather ramp must apply cleanly to the
          * final pixels, including the glow and any channel-shifted fringes. */
         if(featherRectClip)
-            ApplyClipFeather(spd, nominalClipRect, clipFeather, s->m_clipInverse);
+            ApplyClipFeather(tspd, nominalClipRect, clipFeather, s->m_clipInverse);
+#endif
+
+#ifdef _VSMOD // patch m016. track matte
+        if(myMatteState)
+        {
+            /* the canvas accumulates every matte event on this layer; the
+             * extraction is a pure function of the canvas, so re-extracting
+             * after each event keeps the union coverage current */
+            ExtractMatteCoverage(myMatteState->pixels, myMatteState->coverage, myMatteState->inverse);
+            myMatteState->hasCoverage = true;
+        }
+        else if(consumeMatte && !evtPixels.empty())
+        {
+            CompositeMattedCanvas(evtPixels, consumeMatte->coverage, spd, localBBox);
+            CRect clipped(localBBox);
+            if(clipped.left < 0) clipped.left = 0;
+            if(clipped.top < 0) clipped.top = 0;
+            if(clipped.right > spd.w) clipped.right = spd.w;
+            if(clipped.bottom > spd.h) clipped.bottom = spd.h;
+            bbox2 |= clipped;
+        }
 #endif
 
         //delete s;
