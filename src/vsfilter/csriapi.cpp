@@ -523,6 +523,11 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "help": "反向轨道遮罩；遮罩外部可见"
     },
     {
+      "name": "arc",
+      "signature": "\\arc(radius[,angle])",
+      "help": "弧形文字；文字沿以圆心为 \\pos 的圆周排列，\\arc0 关闭"
+    },
+    {
       "name": "clipf",
       "signature": "\\clipf(radius)",
       "help": "羽化裁剪；\\clipf15 柔化矩形/矢量裁剪边缘"

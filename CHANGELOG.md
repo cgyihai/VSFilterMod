@@ -47,6 +47,21 @@
   winning. Regression suite tests/rgrad.py verifies the centre/edge falloff,
   scale, centre orientation, syntax equivalence, mode exclusion and reset.
 
+### Arc text
+
+- `\arc(radius[,angle])`: wraps the line baseline onto a circle of
+  `radius` output pixels centred on the line anchor (the `\pos` point for
+  positioned lines). At angle zero the centre of the line sits on top of
+  the circle and glyphs proceed clockwise, so short text forms a
+  rainbow-like arch while long text wraps around the circle disc-style.
+  Positive radius puts the text outside the circle, negative inside;
+  the angle parameter rotates the whole arrangement, `\arc120` is
+  shorthand for `\arc(120)`, `\t` animation is supported and `\arc0`
+  disables the effect. Text is split into single characters for
+  layout, so Latin ligatures/kerning are lost while CJK text is
+  unaffected; `\fsp` spacing still applies along the arc. TypeSub tag
+  metadata includes the new tag.
+
 ### Track matte
 
 - \matte[offset] / \imatte[offset]: the tagged event becomes a hidden alpha

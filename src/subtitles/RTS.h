@@ -67,6 +67,13 @@ public:
 
     bool isOpaqueBox;
 
+#ifdef _VSMOD // patch m017. arc text
+    /* Set once the arc rotation has been folded into m_style.fontAngleZ;
+     * the rasterized path is cached, so the mutation must happen exactly
+     * once per word object. */
+    bool m_arcApplied;
+#endif
+
     int m_ktype, m_kstart, m_kend;
 
     int m_width, m_ascent, m_descent;

@@ -943,6 +943,9 @@ CWord::CWord(const STSStyle& style, CStringW str, int ktype, int kstart, int ken
     , m_fDrawn(false), m_p(INT_MAX, INT_MAX)
     , m_fLineBreak(false), m_fWhiteSpaceChar(false)
     , m_pOpaqueBox(NULL), isOpaqueBox(false)
+#ifdef _VSMOD
+    , m_arcApplied(false)
+#endif
 {
     if(str.IsEmpty())
     {
@@ -965,6 +968,13 @@ bool CWord::Append(CWord* w)
     if(!(m_style == w->m_style)
        || m_fLineBreak || w->m_fLineBreak
        || w->m_kstart != w->m_kend || m_ktype != w->m_ktype) return(false);
+
+#ifdef _VSMOD // patch m017. arc text
+    /* Arc layout assigns each glyph its own rotation from its horizontal
+     * position, so single-character words must never be compacted back into
+     * a run. */
+    if(m_style.mod_arcRadius != 0) return(false);
+#endif
 
     m_fWhiteSpaceChar = m_fWhiteSpaceChar && w->m_fWhiteSpaceChar;
     m_str += w->m_str;
@@ -1673,6 +1683,48 @@ void CLine::Compact()
 }
 
 #ifdef _VSMOD // patch m006. moveable vector clip
+#ifdef _VSMOD // patch m017. arc text
+/* Arc text layout: the line baseline wraps onto a circle of radius
+ * mod_arcRadius output pixels. The circle centre is the rotation origin
+ * handed down from Render, which for \pos-positioned lines is exactly the
+ * \pos point; the baseline rides radius above it, so the centre of the
+ * line sits on top of the circle at angle zero (negative radius mirrors
+ * the arrangement for inside-the-circle text). Each glyph
+ * rotates about its own baseline midpoint by theta = angle0 + u/R (u = its
+ * signed horizontal offset from the line centre): the shape rotation goes
+ * through fontAngleZ with the pivot handed over as org, then the midpoint
+ * is placed exactly on the circle by shifting the paint position. Rotation
+ * about the midpoint followed by translation is the exact decomposition of
+ * the rigid transform, and the glyph lands on radius R exactly (unlike a
+ * rotation about the circle centre, which would leave it at sqrt(R^2+u^2)).
+ * Everything is in eighth-pixels screen space. */
+static inline void ApplyArcToWord(CWord* w, int x0, int ybase, int lineWidth,
+                                  int penx, int& x, int& y, CPoint& org)
+{
+    const double R8 = w->m_style.mod_arcRadius * 8.0;
+    if(R8 == 0) return;
+    const double cx = x0 + lineWidth / 2.0;
+    const double cy = ybase + R8;
+    const double mx = penx + w->m_width / 2.0;
+    const double theta = w->m_style.mod_arcAngle * (3.14159265358979323846 / 180.0)
+                         + (mx - cx) / R8;
+    if(!w->m_arcApplied)
+    {
+        w->m_style.fontAngleZ += theta * (180.0 / 3.14159265358979323846);
+        w->m_arcApplied = true;
+    }
+    const double dx = cx + R8 * vsfm::DetSin(theta) - mx;
+    const double dy = cy - R8 * vsfm::DetCos(theta) - ybase - R8;
+    x += (int)floor(dx + 0.5);
+    y += (int)floor(dy + 0.5);
+    /* The rotation pivot is the glyph baseline midpoint after the shift: it
+     * must move by the same displacement as the paint position, otherwise the
+     * fontAngleZ rotation acts about a stale point and flings the glyph. */
+    org.x = (int)floor(mx + dx + 0.5);
+    org.y = (int)floor(ybase + dy + 0.5);
+}
+#endif
+
 CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt)
 #else
 CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha)
@@ -1680,11 +1732,15 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
 {
     CRect bbox(0, 0, 0, 0);
 
+#ifdef _VSMOD // patch m017. arc text
+    const int arcX0 = p.x;
+    const int arcYBase = p.y + m_ascent;
+#endif
+
     POSITION pos = GetHeadPosition();
     while(pos)
     {
         CWord* w = GetNext(pos);
-
         if(w->m_fLineBreak) return(bbox); // should not happen since this class is just a line of text without any breaks
 
         if(w->m_style.shadowDepthX != 0 || w->m_style.shadowDepthY != 0)
@@ -1710,7 +1766,13 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
             w->m_style.mod_grad.subpixy = y & 7;
             w->m_style.mod_grad.fadalpha = alpha;
 #endif
+#ifdef _VSMOD // patch m017. arc text
+            CPoint worg = org;
+            ApplyArcToWord(w, arcX0, arcYBase, m_width, p.x, x, y, worg);
+            w->Paint(CPoint(x, y), worg);
+#else
             w->Paint(CPoint(x, y), org);
+#endif
 
             if(w->m_style.borderStyle == 0)
             {
@@ -1747,6 +1809,11 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
 #endif
 {
     CRect bbox(0, 0, 0, 0);
+
+#ifdef _VSMOD // patch m017. arc text
+    const int arcX0 = p.x;
+    const int arcYBase = p.y + m_ascent;
+#endif
 
     POSITION pos = GetHeadPosition();
     while(pos)
@@ -1793,7 +1860,13 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
             w->m_style.mod_grad.fadalpha = alpha;
 #endif
 
+#ifdef _VSMOD // patch m017. arc text
+            CPoint worg = org;
+            ApplyArcToWord(w, arcX0, arcYBase, m_width, p.x, x, y, worg);
+            w->Paint(CPoint(x, y), worg);
+#else
             w->Paint(CPoint(x, y), org);
+#endif
 
             if(w->m_style.borderStyle == 0)
             {
@@ -1826,6 +1899,11 @@ CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoin
 #endif
 {
     CRect bbox(0, 0, 0, 0);
+
+#ifdef _VSMOD // patch m017. arc text
+    const int arcX0 = p.x;
+    const int arcYBase = p.y + m_ascent;
+#endif
 
     POSITION pos = GetHeadPosition();
     while(pos)
@@ -1923,7 +2001,13 @@ CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoin
         w->m_style.mod_grad.fadalpha = alpha;
 #endif
 
+        #ifdef _VSMOD // patch m017. arc text
+        CPoint worg = org;
+        ApplyArcToWord(w, arcX0, arcYBase, m_width, p.x, x, y, worg);
+        w->Paint(CPoint(x, y), worg);
+        #else
         w->Paint(CPoint(x, y), org);
+        #endif
 
         sw[3] = vsfm::CvtTruncSd(w->m_style.outlineWidthX + t * w->getOverlayWidth() + t * bluradjust) >> 3;
 
@@ -2530,6 +2614,23 @@ void CRenderedTextSubtitle::ParseString(CSubtitle* sub, CStringW str, STSStyle& 
 
         if(i < j)
         {
+#ifdef _VSMOD // patch m017. arc text
+            /* Arc layout rotates each glyph independently, which only makes
+             * sense for single-character words: split the run. Kerning and
+             * ligatures are lost (documented); CJK text is unaffected. */
+            if(style.mod_arcRadius != 0)
+            {
+                for(int k = i; k < j; k++)
+                {
+                    if(CWord* w = DNew CText(style, str.Mid(k, 1), m_ktype, m_kstart, m_kend, sub->m_scalex, sub->m_scaley))
+                    {
+                        sub->m_words.AddTail(w);
+                        m_kstart = m_kend;
+                    }
+                }
+            }
+            else
+#endif
             if(CWord* w = DNew CText(style, str.Mid(i, j - i), m_ktype, m_kstart, m_kend, sub->m_scalex, sub->m_scaley))
             {
                 sub->m_words.AddTail(w);
@@ -2655,6 +2756,20 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             params.Add(cmd.Mid(5).Trim(L"&H")), cmd = cmd.Left(5);
         else if(!cmd.Find(L"an"))
             params.Add(cmd.Mid(2)), cmd = cmd.Left(2);
+#ifdef _VSMOD // patch m017. arc text: must precede the a prefix branch
+        else if(!cmd.Find(L"arc"))
+        {
+            if(cmd.GetLength() > 3)
+            {
+                const WCHAR suffixStart = cmd[3];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(3));
+                    cmd = cmd.Left(3);
+                }
+            }
+        }
+#endif
         else if(!cmd.Find(L"a"))
             params.Add(cmd.Mid(1)), cmd = cmd.Left(1);
         else if(!cmd.Find(L"blur"))
@@ -3620,6 +3735,33 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                 style.mod_mblurAngle = org.mod_mblurAngle;
             }
         }
+#ifdef _VSMOD // patch m017. arc text
+        /* rc(radius[,angle]): wrap the line baseline onto a circle. The
+         * circle centre hangs radius below the line-centre baseline point
+         * (negative radius puts it above); angle rotates the whole arrangement
+         * around the centre in degrees. Radius sign is meaningful, so the cap
+         * keeps it. */
+        else if(cmd == L"arc")
+        {
+            if(params.GetCount() > 0)
+            {
+                const double radius = vsfm::WcsToD(params[0], NULL);
+                const double angle = params.GetCount() > 1 ? vsfm::WcsToD(params[1], NULL) : 0.0;
+                double nr = CalcAnimation(radius, style.mod_arcRadius, fAnimate);
+                const double na = CalcAnimation(angle, style.mod_arcAngle, fAnimate);
+                if(!(nr > 0) && !(nr < 0)) nr = 0;
+                else if(nr > 4096) nr = 4096;
+                else if(nr < -4096) nr = -4096;
+                style.mod_arcRadius = nr;
+                style.mod_arcAngle = na;
+            }
+            else
+            {
+                style.mod_arcRadius = org.mod_arcRadius;
+                style.mod_arcAngle = org.mod_arcAngle;
+            }
+        }
+#endif
         else if(cmd == L"bevel")
         {
             if(params.GetCount() > 0)

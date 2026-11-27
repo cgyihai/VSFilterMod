@@ -3327,6 +3327,9 @@ void STSStyle::SetDefault()
     mod_mblurAngle = 0;
     mod_bevelSize = 0;
     mod_bevelStrength = 1;
+    // patch m017. arc text
+    mod_arcRadius = 0;
+    mod_arcAngle = 0;
 #endif
 }
 
@@ -3382,6 +3385,8 @@ bool STSStyle::operator == (STSStyle& s)
            && mod_mblurAngle == s.mod_mblurAngle
            && mod_bevelSize == s.mod_bevelSize
            && mod_bevelStrength == s.mod_bevelStrength
+           && mod_arcRadius == s.mod_arcRadius
+           && mod_arcAngle == s.mod_arcAngle
 #endif
            && IsFontStyleEqual(s));
 }
@@ -3460,6 +3465,8 @@ void STSStyle::mod_CopyStyleFrom(const STSStyle& s)
     mod_mblurAngle = s.mod_mblurAngle;
     mod_bevelSize = s.mod_bevelSize;
     mod_bevelStrength = s.mod_bevelStrength;
+    mod_arcRadius = s.mod_arcRadius;
+    mod_arcAngle = s.mod_arcAngle;
     // font
     charSet = s.charSet;
     fontName = s.fontName;

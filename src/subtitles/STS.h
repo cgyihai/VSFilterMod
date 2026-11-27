@@ -228,6 +228,8 @@ public:
     double mod_mblurAngle;
     double mod_bevelSize;
     double mod_bevelStrength;
+    double mod_arcRadius;
+    double mod_arcAngle;
 #endif
 
     STSStyle();

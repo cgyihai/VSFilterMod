@@ -193,6 +193,18 @@ box corner; cx/cy are the centre as a UV fraction of the box in screen
 orientation and default to the box centre. The regression suites
 tests/vgrad.py and tests/rgrad.py pin the semantics.
 
+### Arc text
+
+`\arc(radius[,angle])` wraps the line baseline onto a circle of `radius`
+output pixels centred on the line anchor (the `\pos` point for positioned
+lines). At angle zero the centre of the line sits on top of the circle and
+glyphs proceed clockwise: short text forms a rainbow arch, long text wraps
+around the full circle disc-style. Positive radius puts text outside the
+circle, negative inside; `\arc120` is shorthand, `\t` animation is
+supported and `\arc0` disables the effect. Text is laid out per character,
+so Latin ligatures/kerning are lost (CJK unaffected); `\fsp` spacing still
+applies along the arc.
+
 ### Track mattes (\matte, \imatte)
 
 A track matte uses one event's silhouette to mask events on a layer above it,

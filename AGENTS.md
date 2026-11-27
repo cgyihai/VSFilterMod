@@ -29,6 +29,17 @@
 - 调参锚点：RTS.cpp 中 `scaleRadius`/`scaleWeight`/`shoulder`。
 - 渲染器像素内部是反转 alpha（pixmix 语义），vector clip 蒙版是 6-bit 覆盖率（0..64），`GlowClipAlpha` 保留了历史 y+1 行采样，不能"修正"。
 
+## 弧形文字（patch m017，v1.10.0 / Windows v2.11.0）实现要点
+
+- ParseString 在 arc 激活时逐字符拆分词；CWord::Append 必须拒绝合并 arc 词
+  （否则 CLine::Compact 把单字符词重新并回整词——弧形完全失效的隐性 bug）。
+- 旋转经 fontAngleZ 变异实现，m_arcApplied 防止三次绘制 pass 重复累加。
+- **旋转枢轴 org 必须跟随 dx/dy 位移**，否则旋转绕陈旧点甩飞字形（位移小时
+  碰巧正确，位移大才暴露）。
+- 绘制位置空间是 eighth-pixels；org 即 \pos（eighth 单位）；圆心=行锚点。
+- 缩进替换陷阱再验证：对 indent-8 子串替换会误伤 indent-12 行（子串包含），
+  必须带上下文锚定。
+
 ## 特效包路线图（2025 更新）
 
 已完成并发布：
