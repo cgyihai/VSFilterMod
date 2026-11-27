@@ -3314,6 +3314,19 @@ void STSStyle::SetDefault()
     mod_glowRadius = 0;
     mod_glowStrength = 1;
     mod_rgbSplit = 0;
+    // patch m014. effect package
+    mod_glowColor = 0;
+    mod_glowColorOverride = false;
+    mod_glowAlpha = 0;
+    mod_iglowRadius = 0;
+    mod_iglowStrength = 1;
+    mod_iglowColor = 0;
+    mod_iglowColorOverride = false;
+    mod_iglowAlpha = 0;
+    mod_mblurLength = 0;
+    mod_mblurAngle = 0;
+    mod_bevelSize = 0;
+    mod_bevelStrength = 1;
 #endif
 }
 
@@ -3356,6 +3369,19 @@ bool STSStyle::operator == (STSStyle& s)
            && mod_glowRadius == s.mod_glowRadius
            && mod_glowStrength == s.mod_glowStrength
            && mod_rgbSplit == s.mod_rgbSplit
+           // patch m014. effect package
+           && mod_glowColor == s.mod_glowColor
+           && mod_glowColorOverride == s.mod_glowColorOverride
+           && mod_glowAlpha == s.mod_glowAlpha
+           && mod_iglowRadius == s.mod_iglowRadius
+           && mod_iglowStrength == s.mod_iglowStrength
+           && mod_iglowColor == s.mod_iglowColor
+           && mod_iglowColorOverride == s.mod_iglowColorOverride
+           && mod_iglowAlpha == s.mod_iglowAlpha
+           && mod_mblurLength == s.mod_mblurLength
+           && mod_mblurAngle == s.mod_mblurAngle
+           && mod_bevelSize == s.mod_bevelSize
+           && mod_bevelStrength == s.mod_bevelStrength
 #endif
            && IsFontStyleEqual(s));
 }
@@ -3421,6 +3447,19 @@ void STSStyle::mod_CopyStyleFrom(const STSStyle& s)
     mod_glowRadius = s.mod_glowRadius;
     mod_glowStrength = s.mod_glowStrength;
     mod_rgbSplit = s.mod_rgbSplit;
+    // patch m014. effect package
+    mod_glowColor = s.mod_glowColor;
+    mod_glowColorOverride = s.mod_glowColorOverride;
+    mod_glowAlpha = s.mod_glowAlpha;
+    mod_iglowRadius = s.mod_iglowRadius;
+    mod_iglowStrength = s.mod_iglowStrength;
+    mod_iglowColor = s.mod_iglowColor;
+    mod_iglowColorOverride = s.mod_iglowColorOverride;
+    mod_iglowAlpha = s.mod_iglowAlpha;
+    mod_mblurLength = s.mod_mblurLength;
+    mod_mblurAngle = s.mod_mblurAngle;
+    mod_bevelSize = s.mod_bevelSize;
+    mod_bevelStrength = s.mod_bevelStrength;
     // font
     charSet = s.charSet;
     fontName = s.fontName;

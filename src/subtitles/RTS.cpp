@@ -21,6 +21,7 @@
 
 #include "../compat/vsfm_compat.h"
 #include "../compat/det_float.h"
+#include "../compat/det_math.h"
 #include <cmath>
 #include <math.h>
 #include <time.h>
@@ -305,6 +306,484 @@ static void CompositeGlowPlane(const GlowPlane16& plane, SubPicDesc& spd, const 
             const int r = (std::min)(255, (int)(((dst >> 16) & 0xff) * invsa >> 8) + sr);
             const int a = (int)(((dst >> 24) & 0xff) * invsa >> 8);
             dstpixel = (unsigned int)b | ((unsigned int)g << 8) | ((unsigned int)r << 16) | ((unsigned int)a << 24);
+        }
+    }
+}
+
+
+/* ---- patch m014. effect package helpers ---- */
+
+static int EffectiveIglowRadius(const STSStyle& style)
+{
+    if(!(style.mod_iglowRadius > 0) || !(style.mod_iglowStrength > 0)) return 0;
+    const double pixels = style.mod_iglowRadius * (1.0 / 8.0);
+    if(!(pixels > 0)) return 0;
+    if(pixels >= 4096) return 4096;
+    return (int)(pixels + 0.5);
+}
+
+static int IglowStrengthQ8(const STSStyle& style)
+{
+    if(!(style.mod_iglowStrength > 0)) return 0;
+    const double strength = style.mod_iglowStrength > 64 ? 64 : style.mod_iglowStrength;
+    return (int)(strength * 256 + 0.5);
+}
+
+/* The composite-time inner glow colour in pixel byte order (blue in the low
+ * byte), ready for blending. White is the default: the primary colour would
+ * be invisible on a fill that is already that colour. */
+static unsigned int IglowEmissionColor(const STSStyle& style)
+{
+    return (unsigned int)revcolor(style.mod_iglowColorOverride ? style.mod_iglowColor : 0xffffff) & 0xffffff;
+}
+
+static bool WordMatchesFilter(const STSStyle& style, const PaintPassFilter& filter)
+{
+    if(filter.radius < 0) return true;
+    if(filter.inner)
+    {
+        return EffectiveIglowRadius(style) == filter.radius
+               && IglowStrengthQ8(style) == filter.strengthQ8
+               && IglowEmissionColor(style) == filter.colorKey
+               && (int)style.mod_iglowAlpha == filter.alphaKey;
+    }
+    return EffectiveGlowRadius(style) == filter.radius
+           && GlowStrengthQ8(style) == filter.strengthQ8;
+}
+
+/* Loads inverted coverage into the plane: zero inside the glyph shape, full
+ * scale outside it. The canvas alpha byte is inverted alpha (255 where never
+ * painted), which is exactly the inverted coverage, so this is a rescale. */
+static void LoadInvertedCoverage16(GlowPlane16& plane, const GlowCanvas& src)
+{
+    for(int y = 0; y < plane.h; y++)
+    {
+        const unsigned int* srow = &src.pixels[(size_t)(plane.oy + y) * src.w + plane.ox];
+        uint16_t* dst = &plane.pixels[(size_t)y * plane.w * 4];
+        for(int x = 0; x < plane.w; x++)
+            dst[x * 4 + 3] = dst[x * 4 + 0] = (uint16_t)(((srow[x] >> 24) & 0xff) * 257);
+    }
+}
+
+/* Inner glow: light bleeding inward from the glyph edges. The classic formula
+ * is coverage x blur(1 - coverage); the blurred inverted plane already holds
+ * blur(1 - coverage). Zero padding beyond the region of interest cannot reach
+ * the glyph because the margin exceeds the blur support, and outside the
+ * coverage the mask is zero anyway. */
+static void CompositeInnerGlowPlane(const GlowPlane16& plane, const GlowCanvas& src, SubPicDesc& spd,
+                                    const CRect& roi, int strengthQ8, unsigned int color, int alphaKey,
+                                    const BYTE* pAlphaMask, const MOD_MOVEVC& mod_vc)
+{
+    const int cb = color & 0xff;
+    const int cg = (color >> 8) & 0xff;
+    const int cr = (color >> 16) & 0xff;
+    /* alphaKey is the ASS-style inverted alpha of the effect: 0 is opaque. */
+    const int alphaScaleQ8 = 256 - ((alphaKey * 256 + 127) / 255);
+    if(alphaScaleQ8 <= 0) return;
+
+    const unsigned long long shoulder = 65535ull * 256ull / 2;
+
+    for(int y = roi.top; y < roi.bottom; y++)
+    {
+        unsigned int* dstrow = (unsigned int*)((BYTE*)spd.bits + y * spd.pitch);
+        const size_t lrow = (size_t)(y - plane.oy) * plane.w;
+        const unsigned int* crow = &src.pixels[(size_t)y * src.w];
+        for(int x = roi.left; x < roi.right; x++)
+        {
+            const int cov = 0xff - ((crow[x] >> 24) & 0xff);
+            if(!cov) continue;
+
+            int scaleQ8 = 256;
+            if(pAlphaMask)
+            {
+                scaleQ8 = (256 * GlowClipAlpha(pAlphaMask, spd.w, mod_vc, x, y) + 32) >> 6;
+                if(!scaleQ8) continue;
+            }
+
+            const size_t idx = (lrow + (x - plane.ox)) * 4;
+            unsigned long long xe = plane.pixels[idx + 3];
+            if(!xe) continue;
+            xe = xe * (unsigned int)strengthQ8;
+            if(scaleQ8 < 256) xe = xe * scaleQ8 >> 8;
+
+            /* Same Reinhard shaping as the outer glow, with the shoulder at
+             * half scale: the edge of the glyph lights up strongly and the
+             * intensity rolls off smoothly towards the interior. */
+            const int t = (int)((xe * 255 + (xe + shoulder) / 2) / (xe + shoulder));
+            if(!t) continue;
+
+            int sa = (t * cov + 127) / 255;
+            sa = (sa * alphaScaleQ8 + 128) >> 8;
+            if(!sa) continue;
+
+            unsigned int& dstpixel = dstrow[x];
+            const unsigned int dst = dstpixel;
+            const int invsa = 0xff - sa;
+            const int b = (std::min)(255, (int)((dst & 0xff) * invsa >> 8) + ((cb * sa + 128) >> 8));
+            const int g = (std::min)(255, (int)(((dst >> 8) & 0xff) * invsa >> 8) + ((cg * sa + 128) >> 8));
+            const int r = (std::min)(255, (int)(((dst >> 16) & 0xff) * invsa >> 8) + ((cr * sa + 128) >> 8));
+            const int a = (int)(((dst >> 24) & 0xff) * invsa >> 8);
+            dstpixel = (unsigned int)b | ((unsigned int)g << 8) | ((unsigned int)r << 16) | ((unsigned int)a << 24);
+        }
+    }
+}
+
+struct IGlowPass
+{
+    int radius;
+    int strengthQ8;
+    unsigned int color;
+    int alphaKey;
+
+    bool operator==(const IGlowPass& other) const
+    {
+        return radius == other.radius && strengthQ8 == other.strengthQ8
+               && color == other.color && alphaKey == other.alphaKey;
+    }
+};
+
+static void CollectIGlowPasses(CSubtitle* subtitle, std::vector<IGlowPass>& passes)
+{
+    passes.clear();
+    POSITION linepos = subtitle->GetHeadPosition();
+    while(linepos)
+    {
+        CLine* line = subtitle->GetNext(linepos);
+        POSITION wordpos = line->GetHeadPosition();
+        while(wordpos)
+        {
+            CWord* word = line->GetNext(wordpos);
+            const int radius = EffectiveIglowRadius(word->m_style);
+            if(radius <= 0) continue;
+            const IGlowPass pass = {radius, IglowStrengthQ8(word->m_style),
+                                    IglowEmissionColor(word->m_style), (int)word->m_style.mod_iglowAlpha};
+            if(std::find(passes.begin(), passes.end(), pass) == passes.end())
+                passes.push_back(pass);
+        }
+    }
+}
+
+/* Directional motion blur as a bitmap post-process. The surface is
+ * premultiplied with inverted alpha, so a straight per-channel average is
+ * correct filtering in both colour and coverage. Taps sit on a line through
+ * each pixel, bilinearly sampled in fixed point; the tap offsets and weights
+ * are constant, so this is a shift-and-accumulate filter. */
+static void ApplyMotionBlur(SubPicDesc& spd, const CRect& contentBox, double lengthPx, double angleDeg)
+{
+    if(!(lengthPx >= 0.5)) return;
+
+    int taps = (int)(lengthPx * 2 + 0.5) + 1;
+    if(taps < 3) taps = 3;
+    if(taps > 95) taps = 95;
+    if(!(taps & 1)) taps++;
+
+    const double rad = angleDeg * (3.14159265358979323846 / 180.0);
+    const double dx = vsfm::DetCos(rad);
+    const double dy = vsfm::DetSin(rad);
+
+    const int ex = (int)(fabs(dx) * lengthPx / 2 + 1.5);
+    const int ey = (int)(fabs(dy) * lengthPx / 2 + 1.5);
+    CRect rr(contentBox.left - ex, contentBox.top - ey, contentBox.right + ex, contentBox.bottom + ey);
+    if(rr.left < 0) rr.left = 0;
+    if(rr.top < 0) rr.top = 0;
+    if(rr.right > spd.w) rr.right = spd.w;
+    if(rr.bottom > spd.h) rr.bottom = spd.h;
+    const int rw = rr.right - rr.left;
+    const int rh = rr.bottom - rr.top;
+    if(rw <= 0 || rh <= 0) return;
+
+    std::vector<unsigned int> backup((size_t)rw * rh);
+    for(int y = 0; y < rh; y++)
+    {
+        const unsigned int* srow = (const unsigned int*)((const BYTE*)spd.bits + (rr.top + y) * spd.pitch) + rr.left;
+        memcpy(&backup[(size_t)y * rw], srow, rw * 4);
+    }
+
+    /* Per-tap offsets in Q16. The +4096 bias keeps the biased sample position
+     * positive so the shift is a clean floor. */
+    std::vector<int> oxs(taps), oys(taps);
+    for(int i = 0; i < taps; i++)
+    {
+        const double t = -lengthPx / 2 + lengthPx * i / (taps - 1);
+        oxs[i] = (int)(dx * t * 65536 + (dx * t >= 0 ? 0.5 : -0.5));
+        oys[i] = (int)(dy * t * 65536 + (dy * t >= 0 ? 0.5 : -0.5));
+    }
+
+    for(int y = 0; y < rh; y++)
+    {
+        unsigned int* drow = (unsigned int*)((BYTE*)spd.bits + (rr.top + y) * spd.pitch) + rr.left;
+        for(int x = 0; x < rw; x++)
+        {
+            unsigned int acc[4] = {0, 0, 0, 0};
+            unsigned int weightSum = 0;
+            for(int i = 0; i < taps; i++)
+            {
+                const int bx = ((x + 4096) << 16) + oxs[i];
+                const int by = ((y + 4096) << 16) + oys[i];
+                const int ix = (bx >> 16) - 4096;
+                const int iy = (by >> 16) - 4096;
+                const int fx = bx & 0xffff;
+                const int fy = by & 0xffff;
+
+                /* Bilinear weights; samples outside the backup are
+                 * transparent black, which contributes nothing. */
+                const int wx1 = fx >> 8, wx0 = 256 - wx1;
+                const int wy1 = fy >> 8, wy0 = 256 - wy1;
+                const int w00 = wx0 * wy0, w10 = wx1 * wy0, w01 = wx0 * wy1, w11 = wx1 * wy1;
+
+                for(int corner = 0; corner < 4; corner++)
+                {
+                    const int cxx = ix + (corner & 1);
+                    const int cyy = iy + (corner >> 1);
+                    const int w = corner == 0 ? w00 : corner == 1 ? w10 : corner == 2 ? w01 : w11;
+                    if(!w) continue;
+                    weightSum += w;
+                    unsigned int pxl = 0xff000000;
+                    if(cxx >= 0 && cxx < rw && cyy >= 0 && cyy < rh)
+                        pxl = backup[(size_t)cyy * rw + cxx];
+                    acc[0] += (pxl & 0xff) * w;
+                    acc[1] += ((pxl >> 8) & 0xff) * w;
+                    acc[2] += ((pxl >> 16) & 0xff) * w;
+                    acc[3] += ((pxl >> 24) & 0xff) * w;
+                }
+            }
+
+            if(!weightSum)
+            {
+                drow[x] = backup[(size_t)y * rw + x];
+                continue;
+            }
+            const unsigned int b = (acc[0] + weightSum / 2) / weightSum;
+            const unsigned int g = (acc[1] + weightSum / 2) / weightSum;
+            const unsigned int r = (acc[2] + weightSum / 2) / weightSum;
+            const unsigned int a = (acc[3] + weightSum / 2) / weightSum;
+            drow[x] = (b & 0xff) | ((g & 0xff) << 8) | ((r & 0xff) << 16) | ((a & 0xff) << 24);
+        }
+    }
+}
+
+/* Bevel/emboss lighting. The coverage gradient across a pair of pixels offset
+ * along the fixed upper-left light direction drives a highlight/shadow term:
+ * edges facing the light brighten towards white, edges facing away darken.
+ * Colour-only modulation in the premultiplied surface keeps the coverage
+ * invariant, so the alpha channel is never touched. */
+static void ApplyBevel(SubPicDesc& spd, const CRect& contentBox, int size, int strengthQ8)
+{
+    if(size <= 0 || strengthQ8 <= 0) return;
+
+    CRect rr(contentBox.left - size, contentBox.top - size, contentBox.right + size, contentBox.bottom + size);
+    if(rr.left < 0) rr.left = 0;
+    if(rr.top < 0) rr.top = 0;
+    if(rr.right > spd.w) rr.right = spd.w;
+    if(rr.bottom > spd.h) rr.bottom = spd.h;
+    const int rw = rr.right - rr.left;
+    const int rh = rr.bottom - rr.top;
+    if(rw <= 0 || rh <= 0) return;
+
+    std::vector<unsigned int> backup((size_t)rw * rh);
+    for(int y = 0; y < rh; y++)
+    {
+        const unsigned int* srow = (const unsigned int*)((const BYTE*)spd.bits + (rr.top + y) * spd.pitch) + rr.left;
+        memcpy(&backup[(size_t)y * rw], srow, rw * 4);
+    }
+
+    /* The lighting term comes from the gradient of a *smoothed* coverage map.
+     * Raw coverage shifts sign at every anti-aliased edge within a couple of
+     * pixels, which reads as speckle rather than a pillow; blurring the map
+     * first spreads the gradient into wide smooth lighting zones. */
+    std::vector<BYTE> covmask((size_t)rw * rh);
+    for(int y = 0; y < rh; y++)
+        for(int x = 0; x < rw; x++)
+            covmask[(size_t)y * rw + x] = (BYTE)(0xff - ((backup[(size_t)y * rw + x] >> 24) & 0xff));
+    {
+        /* small single-scale blur, radix on the bevel size; scalar edition of
+         * the vector mask feather blur, on a copy so the alpha channel in the
+         * frame itself is never touched */
+        std::vector<BYTE> wmask((size_t)rw * rh);
+        const int br = (std::max)(1, size / 2);
+        const int radii[3] = {(br + 2) / 3, (br + 1) / 3, br / 3};
+        BYTE* mask = covmask.data();
+        for(int pass = 0; pass < 3; pass++)
+        {
+            const int r = radii[pass];
+            if(r <= 0) continue;
+            const unsigned int divisor = (unsigned int)(r * 2 + 1);
+            for(int y = 0; y < rh; y++)
+            {
+                BYTE* rowp = mask + (size_t)y * rw;
+                BYTE* orow = wmask.data() + (size_t)y * rw;
+                unsigned int sum = 0;
+                for(int k = -r; k <= r; k++)
+                    if(k >= 0 && k < rw) sum += rowp[k];
+                for(int x = 0; x < rw; x++)
+                {
+                    orow[x] = (BYTE)((sum + divisor / 2) / divisor);
+                    const int addX = x + r + 1, removeX = x - r;
+                    if(addX >= 0 && addX < rw) sum += rowp[addX];
+                    if(removeX >= 0 && removeX < rw) sum -= rowp[removeX];
+                }
+            }
+            for(int x = 0; x < rw; x++)
+            {
+                unsigned int sum = 0;
+                for(int k = -r; k <= r; k++)
+                    if(k >= 0 && k < rh) sum += wmask[(size_t)k * rw + x];
+                for(int y = 0; y < rh; y++)
+                {
+                    mask[(size_t)y * rw + x] = (BYTE)((sum + divisor / 2) / divisor);
+                    const int addY = y + r + 1, removeY = y - r;
+                    if(addY >= 0 && addY < rh) sum += wmask[(size_t)addY * rw + x];
+                    if(removeY >= 0 && removeY < rh) sum -= wmask[(size_t)removeY * rw + x];
+                }
+            }
+        }
+    }
+
+    const auto coverageAt = [&](int x, int y) -> int
+    {
+        if(x < 0 || x >= rw || y < 0 || y >= rh) return 0;
+        return covmask[(size_t)y * rw + x];
+    };
+
+    for(int y = 0; y < rh; y++)
+    {
+        unsigned int* drow = (unsigned int*)((BYTE*)spd.bits + (rr.top + y) * spd.pitch) + rr.left;
+        for(int x = 0; x < rw; x++)
+        {
+            const int emboss = coverageAt(x + size, y + size) - coverageAt(x - size, y - size);
+            if(!emboss) continue;
+            int light = (emboss * strengthQ8 + 128) >> 8;
+            if(light > 255) light = 255;
+            else if(light < -255) light = -255;
+            if(!light) continue;
+
+            const unsigned int pxl = backup[(size_t)y * rw + x];
+            const int cov = 0xff - ((pxl >> 24) & 0xff);
+            if(!cov) continue;
+
+            unsigned int out = pxl & 0xff000000;
+            for(int c = 0; c < 3; c++)
+            {
+                int v = (pxl >> (c * 8)) & 0xff;
+                if(light > 0)
+                {
+                    /* brighten towards coverage-scaled white */
+                    v = v + ((cov - v) * light + 127) / 255;
+                    if(v > cov) v = cov;
+                }
+                else
+                {
+                    v = (v * (255 + light) + 127) / 255;
+                }
+                if(v < 0) v = 0;
+                out |= (unsigned int)v << (c * 8);
+            }
+            drow[x] = out;
+        }
+    }
+}
+
+/* Feathered rectangular clipping: a smoothstep alpha ramp across the feather
+ * zone. For a normal clip the painting rectangle is inflated by the feather
+ * width and the ramp falls off outside the nominal edge, so everything inside
+ * the user rectangle stays fully visible. For an inverse clip the ramp rises
+ * away from the rectangle instead. The surface is premultiplied, so scaling
+ * the opacity scales the colour channels and re-factors the inverted alpha. */
+static void ApplyClipFeather(SubPicDesc& spd, const CRect& nominal, double feather, bool inverse)
+{
+    if(!(feather > 0)) return;
+
+    const int fext = (int)(feather + 0.5) + 1;
+    CRect rr(nominal.left - fext, nominal.top - fext, nominal.right + fext, nominal.bottom + fext);
+    if(rr.left < 0) rr.left = 0;
+    if(rr.top < 0) rr.top = 0;
+    if(rr.right > spd.w) rr.right = spd.w;
+    if(rr.bottom > spd.h) rr.bottom = spd.h;
+    if(rr.IsRectEmpty()) return;
+
+    for(int y = rr.top; y < rr.bottom; y++)
+    {
+        unsigned int* drow = (unsigned int*)((BYTE*)spd.bits + y * spd.pitch);
+        for(int x = rr.left; x < rr.right; x++)
+        {
+            /* Signed distance outwards from the nominal rectangle in pixels. */
+            const double dx = (std::max)((double)(nominal.left - x), (double)(x - nominal.right + 1));
+            const double dy = (std::max)((double)(nominal.top - y), (double)(y - nominal.bottom + 1));
+            double d;
+            if(dx <= 0 && dy <= 0) d = (std::max)(dx, dy);
+            else if(dx <= 0) d = dy;
+            else if(dy <= 0) d = dx;
+            else d = vsfm::DetPow(dx * dx + dy * dy, 0.5);
+
+            if(d <= 0) continue;
+            double t = d / feather;
+            if(t > 1) t = 1;
+
+            /* smoothstep in fixed point; for a normal clip the factor falls
+             * from 1 at the nominal edge, for an inverse clip it rises.
+             * Pixels at or beyond the feather width scale to zero, which is
+             * what erases the inflated painting ring. */
+            const double ss = t * t * (3 - 2 * t);
+            const int f = inverse ? (int)(ss * 256 + 0.5) : (int)((1.0 - ss) * 256 + 0.5);
+            if(f >= 256) continue;
+
+            unsigned int& pxl = drow[x];
+            const unsigned int p = pxl;
+            const unsigned int inv = (p >> 24) & 0xff;
+            const unsigned int cov = 0xff - inv;
+            const unsigned int ncov = (cov * f + 128) >> 8;
+            const unsigned int b = ((p & 0xff) * f + 128) >> 8;
+            const unsigned int g = (((p >> 8) & 0xff) * f + 128) >> 8;
+            const unsigned int r = (((p >> 16) & 0xff) * f + 128) >> 8;
+            pxl = (b & 0xff) | ((g & 0xff) << 8) | ((r & 0xff) << 16) | ((0xff - ncov) << 24);
+        }
+    }
+}
+
+/* Gaussian-approximate blur of a vector clip mask in place. The mask uses the
+ * rasterizer's 6-bit coverage scale; three box passes keep it in that scale. */
+static void FeatherVectorMaskBlur(BYTE* mask, int w, int h, int radius)
+{
+    if(radius <= 0 || w <= 0 || h <= 0) return;
+
+    std::vector<BYTE> work((size_t)w * h);
+    const int radii[3] = {(radius + 2) / 3, (radius + 1) / 3, radius / 3};
+
+    for(int pass = 0; pass < 3; pass++)
+    {
+        const int r = radii[pass];
+        if(r <= 0) continue;
+        const unsigned int divisor = (unsigned int)(r * 2 + 1);
+
+        /* horizontal */
+        for(int y = 0; y < h; y++)
+        {
+            BYTE* row = mask + (size_t)y * w;
+            BYTE* orow = work.data() + (size_t)y * w;
+            unsigned int sum = 0;
+            for(int k = -r; k <= r; k++)
+                if(k >= 0 && k < w) sum += row[k];
+            for(int x = 0; x < w; x++)
+            {
+                orow[x] = (BYTE)((sum + divisor / 2) / divisor);
+                const int addX = x + r + 1, removeX = x - r;
+                if(addX >= 0 && addX < w) sum += row[addX];
+                if(removeX >= 0 && removeX < w) sum -= row[removeX];
+            }
+        }
+        /* vertical */
+        for(int x = 0; x < w; x++)
+        {
+            unsigned int sum = 0;
+            for(int k = -r; k <= r; k++)
+                if(k >= 0 && k < h) sum += work[(size_t)k * w + x];
+            for(int y = 0; y < h; y++)
+            {
+                mask[(size_t)y * w + x] = (BYTE)((sum + divisor / 2) / divisor);
+                const int addY = y + r + 1, removeY = y - r;
+                if(addY >= 0 && addY < h) sum += work[(size_t)addY * w + x];
+                if(removeY >= 0 && removeY < h) sum -= work[(size_t)removeY * w + x];
+            }
         }
     }
 }
@@ -1199,7 +1678,7 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
 }
 
 #ifdef _VSMOD // patch m006. moveable vector clip
-CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt, int glowRadiusFilter, int glowStrengthQ8Filter)
+CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt, const PaintPassFilter& filter)
 #else
 CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha)
 #endif
@@ -1213,8 +1692,8 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
 
         if(w->m_fLineBreak) return(bbox); // should not happen since this class is just a line of text without any breaks
 
-        const bool glowPass = glowRadiusFilter >= 0;
-        if(glowPass && (EffectiveGlowRadius(w->m_style) != glowRadiusFilter || GlowStrengthQ8(w->m_style) != glowStrengthQ8Filter))
+        const bool glowPass = filter.radius >= 0 && !filter.inner;
+        if(filter.radius >= 0 && !WordMatchesFilter(w->m_style, filter))
         {
             p.x += w->m_width;
             continue;
@@ -1230,7 +1709,14 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
 #endif
             DWORD aoutline = w->m_style.alpha[2];
             if(alpha > 0) aoutline += MulDiv(alpha, 0xff - w->m_style.alpha[2], 0xff);
-            COLORREF outline = revcolor(glowPass ? w->m_style.colors[0] : w->m_style.colors[2]) | ((0xff - aoutline) << 24);
+            if(glowPass && w->m_style.mod_glowAlpha)
+                aoutline += MulDiv(w->m_style.mod_glowAlpha, 0xff - aoutline, 0xff);
+            if(aoutline > 0xff) aoutline = 0xff;
+            /* In a glow pass the outline only supplies shape and emits in the
+             * primary colour, unless \glowc overrides the emission. */
+            const COLORREF emission = glowPass && w->m_style.mod_glowColorOverride
+                                      ? w->m_style.mod_glowColor : w->m_style.colors[0];
+            COLORREF outline = revcolor(glowPass ? emission : w->m_style.colors[2]) | ((0xff - aoutline) << 24);
             DWORD sw[6] = {outline, 0xffffffff};
 
 #ifdef _VSMOD // patch m011. jitter
@@ -1271,7 +1757,7 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
 }
 
 #ifdef _VSMOD // patch m006. moveable vector clip
-CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt, int glowRadiusFilter, int glowStrengthQ8Filter)
+CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt, const PaintPassFilter& filter)
 #else
 CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha)
 #endif
@@ -1285,8 +1771,8 @@ CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoin
 
         if(w->m_fLineBreak) return(bbox); // should not happen since this class is just a line of text without any breaks
 
-        const bool glowPass = glowRadiusFilter >= 0;
-        if(glowPass && (EffectiveGlowRadius(w->m_style) != glowRadiusFilter || GlowStrengthQ8(w->m_style) != glowStrengthQ8Filter))
+        const bool glowPass = filter.radius >= 0 && !filter.inner;
+        if(filter.radius >= 0 && !WordMatchesFilter(w->m_style, filter))
         {
             p.x += w->m_width;
             continue;
@@ -1302,11 +1788,22 @@ CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoin
 
         DWORD aprimary = w->m_style.alpha[0];
         if(alpha > 0) aprimary += MulDiv(alpha, 0xff - w->m_style.alpha[0], 0xff);
-        COLORREF primary = revcolor(w->m_style.colors[0]) | ((0xff - aprimary) << 24);
-
         DWORD asecondary = w->m_style.alpha[1];
         if(alpha > 0) asecondary += MulDiv(alpha, 0xff - w->m_style.alpha[1], 0xff);
-        COLORREF secondary = revcolor(w->m_style.colors[1]) | ((0xff - asecondary) << 24);
+        if(glowPass && w->m_style.mod_glowAlpha)
+        {
+            aprimary += MulDiv(w->m_style.mod_glowAlpha, 0xff - aprimary, 0xff);
+            asecondary += MulDiv(w->m_style.mod_glowAlpha, 0xff - asecondary, 0xff);
+        }
+        if(aprimary > 0xff) aprimary = 0xff;
+        if(asecondary > 0xff) asecondary = 0xff;
+        /* In a glow pass \glowc replaces the emission colour. */
+        const COLORREF emissionPrimary = glowPass && w->m_style.mod_glowColorOverride
+                                         ? w->m_style.mod_glowColor : w->m_style.colors[0];
+        const COLORREF emissionSecondary = glowPass && w->m_style.mod_glowColorOverride
+                                           ? w->m_style.mod_glowColor : w->m_style.colors[1];
+        COLORREF primary = revcolor(emissionPrimary) | ((0xff - aprimary) << 24);
+        COLORREF secondary = revcolor(emissionSecondary) | ((0xff - asecondary) << 24);
 
         DWORD sw[6] = {primary, 0, secondary};
 
@@ -1386,6 +1883,10 @@ CSubtitle::CSubtitle()
     memset(m_effects, 0, sizeof(Effect*)*EF_NUMBEROFEFFECTS);
     m_pClipper = NULL;
     m_clipInverse = false;
+#ifdef _VSMOD // patch m014. feathered clip
+    m_clipFeather = 0;
+    m_clipExplicit = false;
+#endif
     m_scalex = m_scaley = 1;
 }
 
@@ -1662,6 +2163,20 @@ void CSubtitle::CreateClippers(CSize size)
             memset(am, 0, (h - j)*w);
         }
     }
+#ifdef _VSMOD // patch m014. feathered vector clip
+    /* Feathering a vector clip blurs its coverage mask once, here where every
+     * tag has been parsed regardless of their order in the line. Animated
+     * subtitles are rebuilt every frame, so even an animated feather stays
+     * correct. All mask consumers (text drawing, glow clipping) then see the
+     * soft edge with no further changes. */
+    if(m_clipFeather > 0 && m_pClipper && m_pClipper->m_pAlphaMask
+       && m_pClipper->m_size.cx > 0 && m_pClipper->m_size.cy > 0)
+    {
+        FeatherVectorMaskBlur(m_pClipper->m_pAlphaMask, m_pClipper->m_size.cx, m_pClipper->m_size.cy,
+                              (int)(m_clipFeather + 0.5));
+    }
+#endif
+
 }
 
 void CSubtitle::MakeLines(CSize size, CRect marginRect)
@@ -2065,10 +2580,38 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             params.Add(cmd.Mid(4)), cmd = cmd.Left(4);
         else if(!cmd.Find(L"bord"))
             params.Add(cmd.Mid(4)), cmd = cmd.Left(4);
+#ifdef _VSMOD // patch m014. bevel: must precede the be/b prefix branches
+        else if(!cmd.Find(L"bevel"))
+        {
+            if(cmd.GetLength() > 5)
+            {
+                const WCHAR suffixStart = cmd[5];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(5));
+                    cmd = cmd.Left(5);
+                }
+            }
+        }
+#endif
         else if(!cmd.Find(L"be"))
             params.Add(cmd.Mid(2)), cmd = cmd.Left(2);
         else if(!cmd.Find(L"b"))
             params.Add(cmd.Mid(1)), cmd = cmd.Left(1);
+#ifdef _VSMOD // patch m014. feathered clip: must precede the clip prefix branch
+        else if(!cmd.Find(L"clipf"))
+        {
+            if(cmd.GetLength() > 5)
+            {
+                const WCHAR suffixStart = cmd[5];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(5));
+                    cmd = cmd.Left(5);
+                }
+            }
+        }
+#endif
         else if(!cmd.Find(L"clip"))
             ;
         else if(!cmd.Find(L"c"))
@@ -2107,8 +2650,45 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             params.Add(cmd.Mid(2)), cmd = cmd.Left(2);
         else if(!cmd.Find(L"iclip"))
             ;
+#ifdef _VSMOD // patch m014. inner glow family: must precede the i prefix branch;
+               // mblur has no conflicting prefix and lives here for tidiness
+        else if(!cmd.Find(L"iglowc"))
+            params.Add(cmd.Mid(6).Trim(L"&H")), cmd = cmd.Left(6);
+        else if(!cmd.Find(L"iglowa"))
+            params.Add(cmd.Mid(6).Trim(L"&H")), cmd = cmd.Left(6);
+        else if(!cmd.Find(L"iglow"))
+        {
+            if(cmd.GetLength() > 5)
+            {
+                const WCHAR suffixStart = cmd[5];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(5));
+                    cmd = cmd.Left(5);
+                }
+            }
+        }
+        else if(!cmd.Find(L"mblur"))
+        {
+            if(cmd.GetLength() > 5)
+            {
+                const WCHAR suffixStart = cmd[5];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(5));
+                    cmd = cmd.Left(5);
+                }
+            }
+        }
+#endif
         else if(!cmd.Find(L"i"))
             params.Add(cmd.Mid(1)), cmd = cmd.Left(1);
+#ifdef _VSMOD // patch m014. glow colour/alpha: must precede the glow prefix branch
+        else if(!cmd.Find(L"glowc"))
+            params.Add(cmd.Mid(5).Trim(L"&H")), cmd = cmd.Left(5);
+        else if(!cmd.Find(L"glowa"))
+            params.Add(cmd.Mid(5).Trim(L"&H")), cmd = cmd.Left(5);
+#endif
 #ifdef _VSMOD // patch m012. glow
         else if(!cmd.Find(L"glow"))
         {
@@ -2124,7 +2704,8 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
         }
 #endif
 #ifdef _VSMOD // patch m013. RGB split
-        /* Must precede the  prefix branch, which would otherwise eat the
+        /* Must precede the 
+ prefix branch, which would otherwise eat the
          * tag as a style reset. */
         else if(!cmd.Find(L"rgb"))
         {
@@ -2517,6 +3098,9 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                     (int)CalcAnimation(sub->m_scaley * r.top + o.y, sub->m_clip.top, fAnimate),
                     (int)CalcAnimation(sub->m_scalex * r.right + o.x, sub->m_clip.right, fAnimate),
                     (int)CalcAnimation(sub->m_scaley * r.bottom + o.y, sub->m_clip.bottom, fAnimate));
+#ifdef _VSMOD // patch m014. feathered clip
+                sub->m_clipExplicit = true;
+#endif
             }
         }
         else if(cmd == L"c")
@@ -2755,6 +3339,104 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             else
             {
                 style.mod_rgbSplit = org.mod_rgbSplit;
+            }
+        }
+        else if(cmd == L"glowc" || cmd == L"iglowc")
+        {
+            COLORREF* target = cmd == L"glowc" ? &style.mod_glowColor : &style.mod_iglowColor;
+            bool* overrideFlag = cmd == L"glowc" ? &style.mod_glowColorOverride : &style.mod_iglowColorOverride;
+            const COLORREF orgColor = cmd == L"glowc" ? org.mod_glowColor : org.mod_iglowColor;
+            const bool orgOverride = cmd == L"glowc" ? org.mod_glowColorOverride : org.mod_iglowColorOverride;
+
+            CStringW hexp = p.Trim(L"&H");
+            if(!hexp.IsEmpty())
+            {
+                DWORD c = vsfm::WcsToL(hexp, NULL, 16);
+                *target = (((int)CalcAnimation(c & 0xff, *target & 0xff, fAnimate)) & 0xff)
+                          | (((int)CalcAnimation(c & 0xff00, *target & 0xff00, fAnimate)) & 0xff00)
+                          | (((int)CalcAnimation(c & 0xff0000, *target & 0xff0000, fAnimate)) & 0xff0000);
+                *overrideFlag = true;
+            }
+            else
+            {
+                *target = orgColor;
+                *overrideFlag = orgOverride;
+            }
+        }
+        else if(cmd == L"glowa" || cmd == L"iglowa")
+        {
+            BYTE* target = cmd == L"glowa" ? &style.mod_glowAlpha : &style.mod_iglowAlpha;
+            const BYTE orgAlpha = cmd == L"glowa" ? org.mod_glowAlpha : org.mod_iglowAlpha;
+
+            CStringW hexp = p.Trim(L"&H");
+            if(!hexp.IsEmpty())
+            {
+                DWORD al = vsfm::WcsToL(hexp, NULL, 16) & 0xff;
+                *target = (BYTE)CalcAnimation(al, *target, fAnimate);
+            }
+            else
+            {
+                *target = orgAlpha;
+            }
+        }
+        else if(cmd == L"iglow")
+        {
+            if(params.GetCount() > 0)
+            {
+                const double radius = vsfm::WcsToD(params[0], NULL);
+                const double strength = params.GetCount() > 1 ? vsfm::WcsToD(params[1], NULL) : 1.0;
+                const double nr = CalcAnimation(radius, style.mod_iglowRadius, fAnimate);
+                const double ns = CalcAnimation(strength, style.mod_iglowStrength, fAnimate);
+                style.mod_iglowRadius = !(nr > 0) ? 0 : nr > 4096 ? 4096 : nr;
+                style.mod_iglowStrength = !(ns > 0) ? 0 : ns > 64 ? 64 : ns;
+            }
+            else
+            {
+                style.mod_iglowRadius = org.mod_iglowRadius;
+                style.mod_iglowStrength = org.mod_iglowStrength;
+            }
+        }
+        else if(cmd == L"mblur")
+        {
+            if(params.GetCount() > 0)
+            {
+                const double length = vsfm::WcsToD(params[0], NULL);
+                const double angle = params.GetCount() > 1 ? vsfm::WcsToD(params[1], NULL) : 0.0;
+                const double nl = CalcAnimation(length, style.mod_mblurLength, fAnimate);
+                const double na = CalcAnimation(angle, style.mod_mblurAngle, fAnimate);
+                style.mod_mblurLength = !(nl > 0) ? 0 : nl > 512 ? 512 : nl;
+                style.mod_mblurAngle = na;
+            }
+            else
+            {
+                style.mod_mblurLength = org.mod_mblurLength;
+                style.mod_mblurAngle = org.mod_mblurAngle;
+            }
+        }
+        else if(cmd == L"bevel")
+        {
+            if(params.GetCount() > 0)
+            {
+                const double size = vsfm::WcsToD(params[0], NULL);
+                const double strength = params.GetCount() > 1 ? vsfm::WcsToD(params[1], NULL) : 1.0;
+                const double nz = CalcAnimation(size, style.mod_bevelSize, fAnimate);
+                const double ns = CalcAnimation(strength, style.mod_bevelStrength, fAnimate);
+                style.mod_bevelSize = !(nz > 0) ? 0 : nz > 256 ? 256 : nz;
+                style.mod_bevelStrength = !(ns > 0) ? 0 : ns > 64 ? 64 : ns;
+            }
+            else
+            {
+                style.mod_bevelSize = org.mod_bevelSize;
+                style.mod_bevelStrength = org.mod_bevelStrength;
+            }
+        }
+        else if(cmd == L"clipf")
+        {
+            if(params.GetCount() > 0)
+            {
+                const double feather = vsfm::WcsToD(params[0], NULL);
+                const double nf = CalcAnimation(feather, sub->m_clipFeather, fAnimate);
+                sub->m_clipFeather = !(nf > 0) ? 0 : nf > 1024 ? 1024 : nf;
             }
         }
 #endif
@@ -3460,6 +4142,7 @@ CSubtitle* CRenderedTextSubtitle::GetSubtitle(int entry)
         tmp.shadowDepthY *= (m_fScaledBAS ? sub->m_scaley : 1) * 8;
 #ifdef _VSMOD // patch m012. glow
         tmp.mod_glowRadius *= 8;
+        tmp.mod_iglowRadius *= 8;
 #endif
 
         if(m_nPolygon)
@@ -3969,6 +4652,24 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 
         p = p2;
 
+#ifdef _VSMOD // patch m014. feathered clip
+        /* The nominal rectangle is what the user wrote in \clip; the painting
+         * rectangle is inflated by the feather width so the ramp outside the
+         * nominal edge has something to fade. Vector clips feather their mask
+         * instead and never come through here. */
+        CRect nominalClipRect = clipRect;
+        const double clipFeather = s->m_clipFeather;
+        const bool featherRectClip = clipFeather > 0 && s->m_clipExplicit && !s->m_pClipper;
+        if(featherRectClip && !s->m_clipInverse)
+        {
+            const int finfl = (int)(clipFeather + 0.5) + 1;
+            clipRect.left -= finfl;
+            clipRect.top -= finfl;
+            clipRect.right += finfl;
+            clipRect.bottom += finfl;
+        }
+#endif
+
         // Rectangles for inverse clip
         CRect iclipRect[4];
         iclipRect[0] = CRect(0, 0, spd.w, clipRect.top);
@@ -4002,8 +4703,8 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
                     /* The glow source is clipped before blurring. Otherwise a
                      * word hidden by \clip could still cast light into the
                      * visible part of the frame. */
-                    glowSourceBBox |= l->PaintOutline(glowCanvas.desc, sourceClipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt, glowRadius, glowStrengthQ8);
-                    glowSourceBBox |= l->PaintBody(glowCanvas.desc, sourceClipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt, glowRadius, glowStrengthQ8);
+                    glowSourceBBox |= l->PaintOutline(glowCanvas.desc, sourceClipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt, PaintPassFilter(glowRadius, glowStrengthQ8));
+                    glowSourceBBox |= l->PaintBody(glowCanvas.desc, sourceClipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt, PaintPassFilter(glowRadius, glowStrengthQ8));
 
                     p.y += l->m_ascent + l->m_descent;
                 }
@@ -4211,6 +4912,135 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
             p.y += l->m_ascent + l->m_descent;
         }
 
+#ifdef _VSMOD // patch m014. inner glow
+        /* Inner glow is part of the glyph appearance, so it composites after
+         * the body painting and before the bitmap post-effects. The emission
+         * is coverage x blur(1 - coverage): light bleeding inward from the
+         * glyph edges. */
+        std::vector<IGlowPass> iglowPasses;
+        CollectIGlowPasses(s, iglowPasses);
+        for(size_t ip = 0; ip < iglowPasses.size(); ip++)
+        {
+            const IGlowPass& pass = iglowPasses[ip];
+            GlowCanvas iglowCanvas(spd.w, spd.h);
+            CRect iglowCoverageBox(0, 0, 0, 0);
+
+            const auto paintIGlowSource = [&](CRect& sourceClipRect)
+            {
+                p = p2;
+                pos = s->GetHeadPosition();
+                while(pos)
+                {
+                    CLine* l = s->GetNext(pos);
+
+                    p.x = (s->m_scrAlignment % 3) == 1 ? org.x
+                          : (s->m_scrAlignment % 3) == 0 ? org.x - l->m_width
+                          :                                  org.x - (l->m_width / 2);
+
+                    iglowCoverageBox |= l->PaintOutline(iglowCanvas.desc, sourceClipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt, PaintPassFilter(pass.radius, pass.strengthQ8, pass.color, pass.alphaKey));
+                    iglowCoverageBox |= l->PaintBody(iglowCanvas.desc, sourceClipRect, pAlphaMask, p, org2, m_time, alpha, mod_vc, rt, PaintPassFilter(pass.radius, pass.strengthQ8, pass.color, pass.alphaKey));
+
+                    p.y += l->m_ascent + l->m_descent;
+                }
+            };
+
+            if(s->m_clipInverse)
+            {
+                for(int iclip = 0; iclip < 4; iclip++) paintIGlowSource(iclipRect[iclip]);
+            }
+            else
+            {
+                paintIGlowSource(clipRect);
+            }
+
+            if(iglowCoverageBox.IsRectEmpty()) continue;
+
+            const int blurRadius = (std::min)(pass.radius, (std::max)(spd.w, spd.h));
+            /* The blur support must stay inside the region of interest for
+             * every covered pixel, otherwise the zero padding beyond it would
+             * darken the edge light. */
+            CRect iglowRect(iglowCoverageBox.left - blurRadius - 1, iglowCoverageBox.top - blurRadius - 1,
+                            iglowCoverageBox.right + blurRadius + 1, iglowCoverageBox.bottom + blurRadius + 1);
+            if(iglowRect.left < 0) iglowRect.left = 0;
+            if(iglowRect.top < 0) iglowRect.top = 0;
+            if(iglowRect.right > spd.w) iglowRect.right = spd.w;
+            if(iglowRect.bottom > spd.h) iglowRect.bottom = spd.h;
+            if(iglowRect.IsRectEmpty()) continue;
+
+            GlowPlane16 plane;
+            plane.Setup(iglowRect.left, iglowRect.top,
+                        iglowRect.right - iglowRect.left, iglowRect.bottom - iglowRect.top);
+            LoadInvertedCoverage16(plane, iglowCanvas);
+            BlurGlowPlane16(plane, (std::max)(1, blurRadius));
+
+            if(s->m_clipInverse)
+            {
+                for(int iclip = 0; iclip < 4; iclip++)
+                {
+                    const CRect compositeRect = IntersectGlowRect(iglowCoverageBox, iclipRect[iclip]);
+                    if(!compositeRect.IsRectEmpty())
+                        CompositeInnerGlowPlane(plane, iglowCanvas, spd, compositeRect, pass.strengthQ8, pass.color, pass.alphaKey, pAlphaMask, mod_vc);
+                }
+            }
+            else
+            {
+                const CRect compositeRect = IntersectGlowRect(iglowCoverageBox, clipRect);
+                if(!compositeRect.IsRectEmpty())
+                    CompositeInnerGlowPlane(plane, iglowCanvas, spd, compositeRect, pass.strengthQ8, pass.color, pass.alphaKey, pAlphaMask, mod_vc);
+            }
+        }
+
+        p = p2;
+#endif
+
+#ifdef _VSMOD // patch m014. bevel and directional blur bitmap post-effects
+        /* Like \rgb these apply to the whole painted sentence; the largest
+         * magnitude wins when words disagree, and the winner's secondary
+         * parameters (angle, strength) come along. */
+        double bevelSize = 0, bevelStrength = 1;
+        double mblurLength = 0, mblurAngle = 0;
+        POSITION fxlinepos = s->GetHeadPosition();
+        while(fxlinepos)
+        {
+            CLine* l = s->GetNext(fxlinepos);
+            POSITION fxwordpos = l->GetHeadPosition();
+            while(fxwordpos)
+            {
+                const CWord* w = l->GetNext(fxwordpos);
+                if(fabs(w->m_style.mod_bevelSize) > fabs(bevelSize))
+                {
+                    bevelSize = w->m_style.mod_bevelSize;
+                    bevelStrength = w->m_style.mod_bevelStrength;
+                }
+                if(fabs(w->m_style.mod_mblurLength) > fabs(mblurLength))
+                {
+                    mblurLength = w->m_style.mod_mblurLength;
+                    mblurAngle = w->m_style.mod_mblurAngle;
+                }
+            }
+        }
+        if(bevelSize > 0 && !bbox2.IsRectEmpty())
+        {
+            ApplyBevel(spd, bbox2, (int)(bevelSize + 0.5), (int)(bevelStrength * 256 + 0.5));
+        }
+        if(mblurLength > 0 && !bbox2.IsRectEmpty())
+        {
+            ApplyMotionBlur(spd, bbox2, mblurLength, mblurAngle);
+            /* the smear spreads the content box along the blur direction */
+            const double mrad = mblurAngle * (3.14159265358979323846 / 180.0);
+            const int mex = (int)(fabs(vsfm::DetCos(mrad)) * mblurLength / 2 + 1.5);
+            const int mey = (int)(fabs(vsfm::DetSin(mrad)) * mblurLength / 2 + 1.5);
+            bbox2.left -= mex;
+            bbox2.right += mex;
+            bbox2.top -= mey;
+            bbox2.bottom += mey;
+            if(bbox2.left < 0) bbox2.left = 0;
+            if(bbox2.top < 0) bbox2.top = 0;
+            if(bbox2.right > spd.w) bbox2.right = spd.w;
+            if(bbox2.bottom > spd.h) bbox2.bottom = spd.h;
+        }
+#endif
+
 #ifdef _VSMOD // patch m013. RGB split
         /* Chromatic aberration: shift the red and blue channels of the painted
          * sentence in opposite directions. This is mathematically identical to
@@ -4276,6 +5106,13 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
                 if(bbox2.right > spd.w) bbox2.right = spd.w;
             }
         }
+#endif
+
+#ifdef _VSMOD // patch m014. feathered rectangular clip
+        /* Last of the post-effects: the feather ramp must apply cleanly to the
+         * final pixels, including the glow and any channel-shifted fringes. */
+        if(featherRectClip)
+            ApplyClipFeather(spd, nominalClipRect, clipFeather, s->m_clipInverse);
 #endif
 
         //delete s;

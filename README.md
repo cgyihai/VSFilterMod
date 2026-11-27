@@ -149,6 +149,28 @@ vsfmrender --size 1920x1080 --fps 23.976 input.ass output.xml
 | `--strict-fonts` | Exit with status 3 if any font had to be substituted |
 | `-q, --quiet` | No progress output |
 
+### Effect package (\glowc, \glowa, \iglow, \mblur, \bevel, \clipf)
+
+Optional companions to \glow plus four new effects; everything supports \t
+animation and a zero value disables:
+
+```ass
+{\glowc&HBBGGRR&}    glow colour override (default follows primary colour)
+{\glowa&HAA&}        glow alpha override (ASS alpha: 00 opaque, FF transparent)
+{\iglow8}            inner glow, radius 8: light bleeding inward from glyph edges
+{\iglow(8,1.5)}      with strength; \iglowc / \iglowa override colour/alpha (default white)
+{\mblur45,10}        directional motion blur, 45 degrees over 10 output pixels
+{evel2}            smooth bevel/emboss relief of size 2
+{\clipf15}           feathered clip edges, radius 15: rect, vector and inverse clips
+```
+
+\iglow is composited after the glyph body and restricted to the interior, so
+it never spills outside. \mblur samples the finished bitmap with deterministic
+integer arithmetic. \clipf softens the line's clip: rectangular clips expand
+their raster region and fade outside the nominal rectangle, while vector clip
+masks are blurred once after parsing so every drawing and glow path inherits
+the soft edge. The regression suite tests/fxpackage.py covers the package.
+
 ### RGB split (\rgb)
 
 The \rgb tag shifts the red and blue channels of the text in opposite

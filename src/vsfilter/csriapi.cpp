@@ -476,6 +476,37 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "signature": "\\rgb(distance)",
       "help": "RGB 色差分离；\\rgb4 是偏移 4 像素的简写"
     },
+
+    {
+      "name": "glowc",
+      "signature": "\\glowc&HBBGGRR&",
+      "help": "发光颜色覆盖（默认跟随主要颜色）"
+    },
+    {
+      "name": "glowa",
+      "signature": "\\glowa&HAA&",
+      "help": "发光透明度覆盖（00 不透明 FF 透明）"
+    },
+    {
+      "name": "iglow",
+      "signature": "\\iglow(radius[,strength])",
+      "help": "内发光；\\iglow8 是半径 8 的简写；配套 \\iglowc/\\iglowa"
+    },
+    {
+      "name": "mblur",
+      "signature": "\\mblur(angle,length)",
+      "help": "方向动态模糊；\\mblur45,10 沿 45 度拖尾 10 像素"
+    },
+    {
+      "name": "bevel",
+      "signature": "\\bevel(size[,strength])",
+      "help": "斜面浮雕；\\bevel2 是尺寸 2 的简写"
+    },
+    {
+      "name": "clipf",
+      "signature": "\\clipf(radius)",
+      "help": "羽化裁剪；\\clipf15 柔化矩形/矢量裁剪边缘"
+    },
     {
       "name": "jitter",
       "signature": "\\jitter(left,right,up,down,period[,seed])",

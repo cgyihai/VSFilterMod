@@ -131,6 +131,26 @@ public:
     BYTE* m_pAlphaMask;
 };
 
+#ifdef _VSMOD // patch m014. effect package
+/* Selects which words an effect-coverage paint pass draws. radius < 0 means
+ * an ordinary paint with no filtering. inner selects the \iglow parameters
+ * instead of the \glow ones; colour and alpha are part of the inner key
+ * because they are applied at composite time, unlike the outer glow whose
+ * colour is painted per word. */
+struct PaintPassFilter
+{
+    int radius;
+    int strengthQ8;
+    bool inner;
+    unsigned int colorKey;
+    int alphaKey;
+
+    PaintPassFilter() : radius(-1), strengthQ8(256), inner(false), colorKey(0), alphaKey(0) {}
+    PaintPassFilter(int r, int s) : radius(r), strengthQ8(s), inner(false), colorKey(0), alphaKey(0) {}
+    PaintPassFilter(int r, int s, unsigned int c, int a) : radius(r), strengthQ8(s), inner(true), colorKey(c), alphaKey(a) {}
+};
+#endif
+
 class CLine : public CAtlList<CWord*>
 {
 public:
@@ -142,8 +162,8 @@ public:
 
 #ifdef _VSMOD // patch m006. moveable vector clip
     CRect PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt);
-    CRect PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt, int glowRadiusFilter = -1, int glowStrengthQ8Filter = 256);
-    CRect PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt, int glowRadiusFilter = -1, int glowStrengthQ8Filter = 256);
+    CRect PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt, const PaintPassFilter& filter = PaintPassFilter());
+    CRect PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha, MOD_MOVEVC& mod_vc, REFERENCE_TIME rt, const PaintPassFilter& filter = PaintPassFilter());
 #else
     CRect PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha);
     CRect PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoint p, CPoint org, int time, int alpha);
@@ -199,6 +219,10 @@ public:
     CRect m_rect, m_clip;
     int m_topborder, m_bottomborder;
     bool m_clipInverse;
+#ifdef _VSMOD // patch m014. feathered clip
+    double m_clipFeather;
+    bool m_clipExplicit;
+#endif
 
     double m_scalex, m_scaley;
 

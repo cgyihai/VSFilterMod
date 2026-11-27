@@ -26,7 +26,26 @@
 - 调参锚点：RTS.cpp 中 `scaleRadius`/`scaleWeight`/`shoulder`。
 - 渲染器像素内部是反转 alpha（pixmix 语义），vector clip 蒙版是 6-bit 覆盖率（0..64），`GlowClipAlpha` 保留了历史 y+1 行采样，不能"修正"。
 
-## 特效包路线图（用户已批准，按序逐个实现）
+## 特效包路线图（2025 更新）
+
+已完成并发布（v1.6.0 / Windows v2.7.0）：
+- \glow bloom 发光、gb 色差
+- \glowc/\glowa 发光颜色与透明度覆盖
+- \iglow(/\iglowc/\iglowa) 内发光
+- \mblur(angle,length) 方向动态模糊
+- evel(size[,strength]) 平滑浮雕
+- \clipf(radius) 羽化裁剪（矩形/矢量/反向）
+
+测试：tests/fxpackage.py 覆盖全部特效；meson test 13 通过 1 跳过。
+
+剩余候选（未做）：径向/任意角度渐变、混合模式（加算）、真透视 3D、轨道遮罩。
+
+移植注意：Windows 树用 wcstod/wcstol/cos/sin/pow 替代 vsfm::WcsTo*/Det*；
+提取跨平台补丁块时注意注释标记歧义（"patch m014. inner glow" 在解析器
+前缀链与渲染循环各出现一次，提取必须带第二行上下文）。
+
+## 旧版路线图存档
+（用户已批准，按序逐个实现）
 
 语法原则：一个数字搞定默认效果，括号形式加进阶参数，0 关闭（与 `\glow` 一致）。
 

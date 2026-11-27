@@ -193,6 +193,21 @@ public:
     double mod_glowRadius;
     double mod_glowStrength;
     double mod_rgbSplit;
+    // patch m014. effect package: glow colour/alpha overrides, inner glow,
+    // directional blur and bevel. Distances are in output pixels; alphas use
+    // the ASS convention (0 = opaque, 255 = transparent).
+    COLORREF mod_glowColor;
+    bool mod_glowColorOverride;
+    BYTE mod_glowAlpha;
+    double mod_iglowRadius;
+    double mod_iglowStrength;
+    COLORREF mod_iglowColor;
+    bool mod_iglowColorOverride;
+    BYTE mod_iglowAlpha;
+    double mod_mblurLength;
+    double mod_mblurAngle;
+    double mod_bevelSize;
+    double mod_bevelStrength;
 #endif
 
     STSStyle();

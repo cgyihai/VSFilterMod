@@ -24,6 +24,32 @@
   transparency, \t animation and rectangular/vector/inverse/moving-vector
   clipping.
 
+### Effect package
+
+- \glowc&HBBGGRR& and \glowa&HAA&: optional glow colour and alpha
+  overrides. The colour replaces the default primary-colour emission and the
+  alpha uses the ASS convention (00 opaque, FF transparent); both support \t
+  animation and reset with the style.
+
+- \iglow inner glow: \iglow8 and \iglow(8[,strength]) draw light that
+  bleeds inward from the glyph edges, limited to the glyph interior and
+  composited after the body. \iglowc/\iglowa override colour and alpha
+  (default white, opaque). \iglow0 disables.
+
+- \mblur(angle,length) directional motion blur: spreads the finished
+  bitmap along the given direction (degrees, output pixels) with deterministic
+  integer sampling. \mblur45,10 or the shorthand suffix form.
+
+- \bevel(size[,strength]) smooth bevel/emboss relief derived from the
+  glyph coverage, composited as highlight/shadow shading.
+
+- \clipf(radius) feathered clipping: softens rectangular and vector
+  clip edges (including inverse clips) by the given radius; \clipf15 is the
+  shorthand. Vector clip masks are blurred once after parsing so all drawing
+  and glow paths inherit the soft edge.
+
+- New regression suite tests/fxpackage.py covers all of the above.
+
 ### Upstream alignment
 
 - Carried over upstream's non-blocking unknown-style diagnostic: distinct
