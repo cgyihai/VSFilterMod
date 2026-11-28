@@ -2,6 +2,16 @@
 
 [English](CHANGELOG.md) | **简体中文** | [日本語](CHANGELOG.ja.md) | [한국어](CHANGELOG.ko.md)
 
+## 1.19.1
+
+### 缺陷修复
+
+- `\1img`–`\4img` 文件参数现在在所有平台上都相对于字幕脚本所在目录解析。
+  此前路径拆分只识别 `\\` 分隔符，Linux、macOS 与 MinGW 下 `\1img(tex.png)`
+  这类裸文件名会退化为进程工作目录，静默退化为纯色填充而不加载图像。
+- `typesub-tags` 测试在 AddressSanitizer/MemorySanitizer 环境下跳过 ctypes
+  端到端检查（带插桩的插件无法 dlopen 进未插桩的解释器）。
+
 ## 1.19.0
 
 ### 行级连续图像填充与 `\imgscale`

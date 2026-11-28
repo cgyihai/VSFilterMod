@@ -2,6 +2,18 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md) | [日本語](CHANGELOG.ja.md) | **한국어**
 
+## 1.19.1
+
+### 버그 수정
+
+- `\1img`–`\4img` 파일 인자가 이제 모든 플랫폼에서 자막 스크립트 디렉터리를
+  기준으로 해석됩니다. 이전에는 경로를 `\\`로만 분리했기 때문에 Linux,
+  macOS, MinGW에서 `\1img(tex.png)` 같은 단순 파일명이 프로세스 작업
+  디렉터리 기준으로 떨어져 이미지를 읽지 못하고 단색으로만 렌더링했습니다.
+- `typesub-tags` 테스트는 AddressSanitizer/MemorySanitizer 환경에서
+  ctypes 종단간 검사를 건너뜁니다(계측된 플러그인은 계측되지 않은
+  인터프리터에 dlopen 할 수 없음).
+
 ## 1.19.0
 
 ### 줄 연속 이미지 채우기와 `\imgscale`

@@ -3561,7 +3561,10 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             {
                 if(!fAnimate)
                 {
-                    CString fpath = !m_resPath.IsEmpty() ? m_resPath : m_path.Left(m_path.ReverseFind('\\') + 1);
+                    ptrdiff_t sepPos = m_path.ReverseFind('\\');
+                    const ptrdiff_t sepPos2 = m_path.ReverseFind('/');
+                    if(sepPos2 > sepPos) sepPos = sepPos2;
+                    CString fpath = !m_resPath.IsEmpty() ? m_resPath : m_path.Left(sepPos + 1);
 
                     bool t_init = false;
                     // buffer

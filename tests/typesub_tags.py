@@ -40,6 +40,13 @@ def main(argv):
     print("structure ok: %d tags" % len(names))
 
     # End-to-end: load the built plugin and compare its exported bytes.
+    # Under ASan/MSan the instrumented plugin cannot be dlopen'ed into the
+    # uninstrumented interpreter -- the runtime aborts the process before
+    # ctypes can report an error -- so the byte/structure checks above stand
+    # alone there.
+    if any(os.environ.get(v) for v in ("ASAN_OPTIONS", "MSAN_OPTIONS", "LSAN_OPTIONS")):
+        print("end-to-end skipped: sanitizer environment")
+        return 0
     # Windows builds need the subproject DLL directories on the search path;
     # ELF builds statically link those dependencies into the plugin.
     if hasattr(os, "add_dll_directory"):

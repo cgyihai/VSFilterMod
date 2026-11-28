@@ -2,6 +2,19 @@
 
 **English** | [简体中文](CHANGELOG.zh-CN.md) | [日本語](CHANGELOG.ja.md) | [한국어](CHANGELOG.ko.md)
 
+## 1.19.1
+
+### Bug fixes
+
+- `\1img`–`\4img` file arguments now resolve relative to the subtitle's
+  directory on every platform. The lookup previously split the script path
+  only on `\\`, so on Linux, macOS and MinGW a bare filename such as
+  `\1img(tex.png)` fell back to the process working directory and silently
+  rendered the fill color instead of the image.
+- The `typesub-tags` test skips its ctypes end-to-end check under
+  AddressSanitizer/MemorySanitizer, where an instrumented plugin cannot be
+  dlopen'ed into the uninstrumented interpreter.
+
 ## 1.19.0
 
 ### Line-continuous image fills and `\imgscale`
