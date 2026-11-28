@@ -322,6 +322,17 @@ pixels, out-of-range samples render transparent instead of wrapping, and
 `\imgscale` does not apply to the fit modes.
 
 
+### `\kk(charcount[,d1[,d2...]])` — typewriter reveal
+
+Characters pop in one at a time, compatible with the AssRocket
+VSFilterMod extension. Character i appears once the cumulative
+centisecond delays d1+...+d(i+1) of the event have elapsed; empty or
+missing delays default to 100cs, and characters beyond charcount all
+appear together with the last controlled one. Spaces count as
+characters, `\N`/`\n` do not. Timing matches the reference
+renderer exactly.
+
+
 ### `\shadblur(radius)` / `\bordblur(radius)` — per-layer blur
 
 Gaussian blur applied to one layer only: the shadow / outline pass

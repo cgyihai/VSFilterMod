@@ -76,6 +76,9 @@ public:
 #endif
 
     int m_ktype, m_kstart, m_kend;
+    /* Event-relative time in milliseconds at which this word pops in under
+     * \kk typewriter control; -1 keeps the word always visible. */
+    int m_kkReveal;
 
     int m_width, m_ascent, m_descent;
 
@@ -304,6 +307,11 @@ class CRenderedTextSubtitle : public CSimpleTextSubtitle
     int m_animStart, m_animEnd;
     double m_animAccel;
     int m_ktype, m_kstart, m_kend;
+    /* \kk typewriter parse state: character count under control, the running
+     * character index across the event and the per-position centisecond
+     * delays. \kk0 or no tag means inactive. */
+    int m_kkCount, m_kkIndex;
+    int m_kkDelays[64];
     int m_nPolygon;
     int m_polygonBaselineOffset;
     STSStyle *m_pStyleOverride; // the app can decide to use this style instead of a built-in one

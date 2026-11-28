@@ -447,6 +447,11 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "help": "主体填充位图等比适配整行（居中留白透明）"
     },
     {
+      "name": "kk",
+      "signature": "\\kk(charcount[,d1[,d2...]])",
+      "help": "打字机逐字显现；延迟单位厘秒累积，空缺默认100"
+    },
+    {
       "name": "1vc",
       "signature": "\\1vc(&Hc1&,&Hc2&,&Hc3&,&Hc4&)",
       "help": "主体四角渐变色"

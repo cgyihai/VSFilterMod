@@ -2,6 +2,19 @@
 
 **English** | [简体中文](CHANGELOG.zh-CN.md) | [日本語](CHANGELOG.ja.md) | [한국어](CHANGELOG.ko.md)
 
+## 1.21.0
+
+### New effect tags
+
+- \kk(charcount[,d1[,d2...]]) -- typewriter reveal compatible with the
+  AssRocket VSFilterMod extension. Characters pop in one at a time at their
+  cumulative centisecond delays: character i appears once d1+...+d(i+1)
+  centiseconds of the event have elapsed, empty or missing delays default
+  to 100cs, and characters beyond charcount all appear together with the
+  last controlled one. Spaces count as characters, \N/\n do not.
+  Timing matches the reference renderer exactly (verified frame-step by
+  frame-step in a dual-dll probe).
+
 ## 1.20.0
 
 ### New effect tags

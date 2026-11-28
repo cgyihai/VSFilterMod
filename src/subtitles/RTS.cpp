@@ -987,7 +987,7 @@ CMyFont::CMyFont(const STSStyle& style)
 CWord::CWord(const STSStyle& style, CStringW str, int ktype, int kstart, int kend, double scalex, double scaley)
     : m_style(style), m_str(str)
     , m_width(0), m_ascent(0), m_descent(0)
-    , m_ktype(ktype), m_kstart(kstart), m_kend(kend)
+    , m_ktype(ktype), m_kstart(kstart), m_kend(kend), m_kkReveal(-1)
     , m_scalex(scalex), m_scaley(scaley)
     , m_fDrawn(false), m_p(INT_MAX, INT_MAX)
     , m_fLineBreak(false), m_fWhiteSpaceChar(false)
@@ -1024,6 +1024,11 @@ bool CWord::Append(CWord* w)
      * position, so single-character words must never be compacted back into
      * a run. */
     if(m_style.mod_arcRadius != 0 || m_style.mod_waveAmp != 0) return(false);
+#endif
+#ifdef _VSMOD // patch m029. typewriter text
+    /* Typewriter characters carry individual reveal times and must never be
+     * compacted back into a run either. */
+    if(m_kkReveal >= 0 || w->m_kkReveal >= 0) return(false);
 #endif
 
     m_fWhiteSpaceChar = m_fWhiteSpaceChar && w->m_fWhiteSpaceChar;
@@ -1946,6 +1951,9 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
     {
         CWord* w = GetNext(pos);
         if(w->m_fLineBreak) return(bbox); // should not happen since this class is just a line of text without any breaks
+#ifdef _VSMOD // patch m029. typewriter text
+        if(time < w->m_kkReveal) continue; // m_kkReveal is -1 unless \kk controls this word
+#endif
 
         if(w->m_style.shadowDepthX != 0 || w->m_style.shadowDepthY != 0 || w->m_style.mod_extrudeDepth != 0)
         {
@@ -2081,6 +2089,9 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
         CWord* w = GetNext(pos);
 
         if(w->m_fLineBreak) return(bbox); // should not happen since this class is just a line of text without any breaks
+#ifdef _VSMOD // patch m029. typewriter text
+        if(time < w->m_kkReveal) continue; // m_kkReveal is -1 unless \kk controls this word
+#endif
 
         const bool glowPass = filter.radius >= 0 && !filter.inner;
         if(filter.radius >= 0 && !WordMatchesFilter(w->m_style, filter))
@@ -2194,6 +2205,9 @@ CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoin
         CWord* w = GetNext(pos);
 
         if(w->m_fLineBreak) return(bbox); // should not happen since this class is just a line of text without any breaks
+#ifdef _VSMOD // patch m029. typewriter text
+        if(time < w->m_kkReveal) continue; // m_kkReveal is -1 unless \kk controls this word
+#endif
 
         const bool glowPass = filter.radius >= 0 && !filter.inner;
         if(filter.radius >= 0 && !WordMatchesFilter(w->m_style, filter))
@@ -2937,7 +2951,7 @@ void CRenderedTextSubtitle::ParseString(CSubtitle* sub, CStringW str, STSStyle& 
             /* Arc layout rotates each glyph independently, which only makes
              * sense for single-character words: split the run. Kerning and
              * ligatures are lost (documented); CJK text is unaffected. */
-            if(style.mod_arcRadius != 0 || style.mod_waveAmp != 0)
+            if(style.mod_arcRadius != 0 || style.mod_waveAmp != 0 || m_kkCount > 0)
             {
                 for(int k = i; k < j; k++)
                 {
@@ -2954,6 +2968,16 @@ void CRenderedTextSubtitle::ParseString(CSubtitle* sub, CStringW str, STSStyle& 
                     }
                     if(CWord* w = DNew CText(style, str.Mid(k, charLen), m_ktype, m_kstart, m_kend, sub->m_scalex, sub->m_scaley))
                     {
+#ifdef _VSMOD // patch m029. typewriter text
+                        if(m_kkCount > 0)
+                        {
+                            const int effPos = m_kkIndex + 1 < m_kkCount ? m_kkIndex + 1 : m_kkCount;
+                            int reveal = 0;
+                            for(int dj = 0; dj < effPos; dj++) reveal += m_kkDelays[dj] * 10;
+                            w->m_kkReveal = reveal;
+                            m_kkIndex++;
+                        }
+#endif
                         sub->m_words.AddTail(w);
                         m_kstart = m_kend;
                     }
@@ -2981,6 +3005,16 @@ void CRenderedTextSubtitle::ParseString(CSubtitle* sub, CStringW str, STSStyle& 
         {
             if(CWord* w = DNew CText(style, CStringW(c), m_ktype, m_kstart, m_kend, sub->m_scalex, sub->m_scaley))
             {
+#ifdef _VSMOD // patch m029. typewriter text
+                if(m_kkCount > 0)
+                {
+                    const int effPos = m_kkIndex + 1 < m_kkCount ? m_kkIndex + 1 : m_kkCount;
+                    int reveal = 0;
+                    for(int dj = 0; dj < effPos; dj++) reveal += m_kkDelays[dj] * 10;
+                    w->m_kkReveal = reveal;
+                    m_kkIndex++;
+                }
+#endif
                 sub->m_words.AddTail(w);
                 m_kstart = m_kend;
             }
@@ -3022,6 +3056,7 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
         if(cmd.IsEmpty()) continue;
 
         CAtlArray<CStringW> params;
+        CStringW rawParams; // untokenised parenthesis body for tags whose empty slots carry meaning
 
         if(str[j] == '(')
         {
@@ -3035,6 +3070,7 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                 if(br == 0) break;
             }
             param.Trim();
+            rawParams = param;
 
             while(!param.IsEmpty())
             {
@@ -3406,6 +3442,8 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
         else if(!cmd.Find(L"jitter"))
             ;
 #endif
+        else if(!cmd.Find(L"kk"))
+            ;
         else if(!cmd.Find(L"kt") || !cmd.Find(L"kf") || !cmd.Find(L"ko"))
             params.Add(cmd.Mid(2)), cmd = cmd.Left(2);
         else if(!cmd.Find(L"k") || !cmd.Find(L"K"))
@@ -4506,6 +4544,48 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             }
         }
 #endif
+        else if(cmd == L"kk")
+        {
+#ifdef _VSMOD // patch m029. typewriter text
+            /* \kk(charcount[,d1[,d2...]]): typewriter reveal. Character i
+             * pops in once the cumulative centisecond delays up to position
+             * i+1 have elapsed; empty or missing delays default to 100cs and
+             * characters beyond charcount appear together with the last
+             * controlled one. The raw parameter text is reparsed here because
+             * the generic tokenizer drops empty slots, while an empty slot in
+             * this tag means the default delay at that position. */
+            int count = 0;
+            for(int di = 0; di < 64; di++)
+                m_kkDelays[di] = 100;
+            if(!rawParams.IsEmpty())
+            {
+                CStringW rest = rawParams;
+                for(int slot = 0; slot < 65; slot++)
+                {
+                    const int comma = rest.Find(',');
+                    CStringW tok = comma >= 0 ? rest.Left(comma) : rest;
+                    tok.Trim();
+                    if(slot == 0)
+                    {
+                        if(!tok.IsEmpty()) count = vsfm::WcsToL(tok, NULL, 10);
+                    }
+                    else if(!tok.IsEmpty())
+                    {
+                        int dv = vsfm::WcsToL(tok, NULL, 10);
+                        if(dv < 0) dv = 0;
+                        m_kkDelays[slot - 1] = dv;
+                    }
+                    if(comma < 0) break;
+                    rest = comma + 1 < rest.GetLength() ? rest.Mid(comma + 1) : CStringW();
+                }
+            }
+            if(count < 0) count = 0;
+            if(count > 64) count = 64;
+            m_kkCount = count;
+            if(count == 0)
+                m_kkIndex = 0;
+#endif
+        }
         else if(cmd == L"kt")
         {
             m_kstart = !p.IsEmpty()
@@ -5122,6 +5202,7 @@ CSubtitle* CRenderedTextSubtitle::GetSubtitle(int entry)
     m_animStart = m_animEnd = 0;
     m_animAccel = 1;
     m_ktype = m_kstart = m_kend = 0;
+    m_kkCount = m_kkIndex = 0;
     m_nPolygon = 0;
     m_polygonBaselineOffset = 0;
 #ifdef _VSMOD // patch m004. gradient colors
