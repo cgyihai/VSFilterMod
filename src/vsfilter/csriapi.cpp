@@ -432,6 +432,21 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "help": "位图填充缩放；sy 省略时等于 sx，\\imgscale0 恢复 1:1"
     },
     {
+      "name": "5img",
+      "signature": "\\5img(file[,x,y])",
+      "help": "主体填充位图拉伸铺满整行（长宽比变形）"
+    },
+    {
+      "name": "6img",
+      "signature": "\\6img(file[,x,y])",
+      "help": "主体填充位图等比覆盖整行（居中裁剪溢出）"
+    },
+    {
+      "name": "7img",
+      "signature": "\\7img(file[,x,y])",
+      "help": "主体填充位图等比适配整行（居中留白透明）"
+    },
+    {
       "name": "1vc",
       "signature": "\\1vc(&Hc1&,&Hc2&,&Hc3&,&Hc4&)",
       "help": "主体四角渐变色"

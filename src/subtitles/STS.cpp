@@ -4019,6 +4019,52 @@ static inline DWORD ClampImageTextureChannel(double v)
 }
 #endif
 
+#ifdef _VSMOD // patch m028. image fit modes
+/* Fit-transform of the \5img-\7img modes. The texture is scaled against the
+ * overlay's own bounding box instead of being sampled 1:1: mode 5 stretches each axis
+ * independently, mode 6 scales uniformly to cover the box (centered, the
+ * overflow crops away), mode 7 scales uniformly to fit inside it (centered,
+ * the uncovered margin stays transparent). Pure IEEE double arithmetic. */
+static inline void ComputeImageFitTransform(int mode, double boxW, double boxH, int texW, int texH,
+                                            double& scaleX, double& scaleY, double& cx, double& cy)
+{
+    if(mode == 5)
+    {
+        scaleX = boxW / texW;
+        scaleY = boxH / texH;
+        cx = 0;
+        cy = 0;
+    }
+    else
+    {
+        const double sx = boxW / texW;
+        const double sy = boxH / texH;
+        const double s = mode == 6 ? (sx > sy ? sx : sy) : (sx < sy ? sx : sy);
+        scaleX = s;
+        scaleY = s;
+        cx = (boxW - texW * s) / 2;
+        cy = (boxH - texH * s) / 2;
+    }
+}
+
+/* Texture coordinate for one axis under the fit modes. Unlike the wrapped
+ * \1img-\4img sampling, coordinates outside the image are invalid and the
+ * pixel renders transparent. The far edge is inclusive with clamp-to-edge:
+ * a pixel landing exactly on the box boundary still samples the edge texel,
+ * so cover and stretch genuinely paint the whole box instead of leaving a
+ * one-pixel transparent strip along the top/right edges. */
+static inline bool FitImageTextureCoord(double linePos, double fitC, double fitScale, int texSize,
+                                        double& texOut)
+{
+    texOut = (linePos - fitC) / fitScale;
+    if(!(fitScale > 0) || texOut < 0 || texOut > texSize)
+        return false;
+    if(texOut >= texSize)
+        texOut = texSize - 1;
+    return true;
+}
+#endif
+
 void MOD_GRADIENT::prepareImageTextureCache(int drawWidth, int drawHeight)
 {
     for(int ci = 0; ci < 4; ci++)
@@ -4030,7 +4076,9 @@ void MOD_GRADIENT::prepareImageTextureCache(int drawWidth, int drawHeight)
 
     for(int channel = 0; channel < 4; channel++)
     {
-        if(mode[channel] != 2) continue;
+        const int imgMode = mode[channel];
+        const bool fit = imgMode >= 5 && imgMode <= 7;
+        if(imgMode != 2 && !fit) continue;
 
         MOD_PNGIMAGE& image = b_images[channel];
         if(!image.pointer || image.width <= 0 || image.height <= 0 || image.bpp <= 0) continue;
@@ -4049,31 +4097,57 @@ void MOD_GRADIENT::prepareImageTextureCache(int drawWidth, int drawHeight)
 
         const double scaleX = imgScaleX != 0 ? imgScaleX : 1;
         const double scaleY = imgScaleY != 0 ? imgScaleY : 1;
+
+        /* The fit box is the overlay's own bounding box, matching the
+         * reference renderer's per-word behaviour: horizontal zero at its
+         * left edge, vertical zero at its top edge, both in output pixels. */
+        double fitScaleX = 0, fitScaleY = 0, fitCx = 0, fitCy = 0;
+        if(fit)
+        {
+            ComputeImageFitTransform(imgMode, (double)width, (double)height,
+                                     image.width, image.height,
+                                     fitScaleX, fitScaleY, fitCx, fitCy);
+        }
+
         for(int drawX = 0; drawX < drawWidth; drawX++)
         {
             const int adjustedX = drawX + xoffset;
             const long long lineX8 = (long long)adjustedX * 8 + imgBaseX8;
-            const double texX =
-                WrapImageTextureCoord(((double)lineX8 / 8.0 + image.xoffset) / scaleX, image.width);
+            double texX;
+            bool valid = true;
+            if(fit)
+                valid = FitImageTextureCoord((double)adjustedX + image.xoffset, fitCx, fitScaleX, image.width, texX);
+            else
+                texX = WrapImageTextureCoord(((double)lineX8 / 8.0 + image.xoffset) / scaleX, image.width);
             const int x0 = (int)floor(texX);
-            const int x1 = x0 + 1 < image.width ? x0 + 1 : 0;
+            const int x1 = fit ? (x0 + 1 < image.width ? x0 + 1 : x0)
+                               : (x0 + 1 < image.width ? x0 + 1 : 0);
             ImgTexX& xc = imgTexX[channel][(size_t)drawX];
             xc.x0bytes = x0 * image.bpp;
             xc.x1bytes = x1 * image.bpp;
             xc.fx = texX - x0;
+            xc.valid = valid;
         }
         for(int drawY = 0; drawY < drawHeight; drawY++)
         {
             const int adjustedY = drawY + clipDiff;
             const long long lineY8 = (long long)adjustedY * 8 + imgBaseY8;
-            const double texY =
-                WrapImageTextureCoord(((double)lineY8 / 8.0 + image.yoffset) / scaleY, image.height);
+            double texY;
+            bool valid = true;
+            if(fit)
+                valid = FitImageTextureCoord((double)adjustedY + image.yoffset, fitCy, fitScaleY, image.height, texY);
+            else
+                texY = WrapImageTextureCoord(((double)lineY8 / 8.0 + image.yoffset) / scaleY, image.height);
             const int y0 = (int)floor(texY);
-            const int y1 = y0 + 1 < image.height ? y0 + 1 : 0;
+            const int y1 = fit ? (y0 + 1 < image.height ? y0 + 1 : y0)
+                               : (y0 + 1 < image.height ? y0 + 1 : 0);
+            const int rowi0 = y0 < 0 ? 0 : y0 >= image.height ? image.height - 1 : y0;
+            const int rowi1 = y1 < 0 ? 0 : y1 >= image.height ? image.height - 1 : y1;
             ImgTexY& yc = imgTexY[channel][(size_t)drawY];
-            yc.row0 = image.pointer[image.height - 1 - y0];
-            yc.row1 = image.pointer[image.height - 1 - y1];
+            yc.row0 = image.pointer[image.height - 1 - rowi0];
+            yc.row1 = image.pointer[image.height - 1 - rowi1];
             yc.fy = texY - y0;
+            yc.valid = valid;
         }
     }
 }
@@ -4187,8 +4261,9 @@ DWORD MOD_GRADIENT::getmixcolor(int tx, int ty, int i) // too slow T.T
         colorb  |= (((0xff - al) * (0xff - fadalpha)) & 0xff00) << (16);
         return colorb;
     }
-    // png background
-    if(mode[i] == 2)
+    // png background (\1img-\4img wrapped, \5img-\7img fitted to the line box)
+    const bool imgFit = mode[i] >= 5 && mode[i] <= 7;
+    if(mode[i] == 2 || imgFit)
     {
         ty += clipDiff;
 
@@ -4201,6 +4276,8 @@ DWORD MOD_GRADIENT::getmixcolor(int tx, int ty, int i) // too slow T.T
         {
             const ImgTexX& xc = imgTexX[i][(size_t)drawX];
             const ImgTexY& yc = imgTexY[i][(size_t)drawY];
+            if(!xc.valid || !yc.valid)
+                return 0; // outside the fitted image: transparent, no wrap
             x0bytes = xc.x0bytes;
             x1bytes = xc.x1bytes;
             row0 = yc.row0;
@@ -4214,14 +4291,35 @@ DWORD MOD_GRADIENT::getmixcolor(int tx, int ty, int i) // too slow T.T
              * This is the original per-pixel coordinate computation. */
             const long long lineX8 = (long long)tx * 8 + imgBaseX8;
             const long long lineY8 = (long long)ty * 8 + imgBaseY8;
-            const double scaleX = imgScaleX != 0 ? imgScaleX : 1;
-            const double scaleY = imgScaleY != 0 ? imgScaleY : 1;
-            const double texX = WrapImageTextureCoord(((double)lineX8 / 8.0 + image.xoffset) / scaleX, image.width);
-            const double texY = WrapImageTextureCoord(((double)lineY8 / 8.0 + image.yoffset) / scaleY, image.height);
+            double texX, texY;
+            int x1, y1;
+            if(imgFit)
+            {
+                double fitScaleX, fitScaleY, fitCx, fitCy;
+                ComputeImageFitTransform(mode[i], (double)width, (double)height,
+                                         image.width, image.height,
+                                         fitScaleX, fitScaleY, fitCx, fitCy);
+                /* tx already carries xoffset and ty carries clipDiff, so both
+                 * are overlay-local coordinates in output pixels here. */
+                if(!FitImageTextureCoord((double)tx + image.xoffset, fitCx, fitScaleX, image.width, texX)
+                   || !FitImageTextureCoord((double)ty + image.yoffset, fitCy, fitScaleY, image.height, texY))
+                    return 0;
+                const int x0f = (int)floor(texX);
+                const int y0f = (int)floor(texY);
+                x1 = x0f + 1 < image.width ? x0f + 1 : x0f;
+                y1 = y0f + 1 < image.height ? y0f + 1 : y0f;
+            }
+            else
+            {
+                const double scaleX = imgScaleX != 0 ? imgScaleX : 1;
+                const double scaleY = imgScaleY != 0 ? imgScaleY : 1;
+                texX = WrapImageTextureCoord(((double)lineX8 / 8.0 + image.xoffset) / scaleX, image.width);
+                texY = WrapImageTextureCoord(((double)lineY8 / 8.0 + image.yoffset) / scaleY, image.height);
+                x1 = (int)floor(texX) + 1 < image.width ? (int)floor(texX) + 1 : 0;
+                y1 = (int)floor(texY) + 1 < image.height ? (int)floor(texY) + 1 : 0;
+            }
             const int x0 = (int)floor(texX);
             const int y0 = (int)floor(texY);
-            const int x1 = x0 + 1 < image.width ? x0 + 1 : 0;
-            const int y1 = y0 + 1 < image.height ? y0 + 1 : 0;
             x0bytes = x0 * image.bpp;
             x1bytes = x1 * image.bpp;
             row0 = image.pointer[image.height - 1 - y0];

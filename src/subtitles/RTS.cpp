@@ -3553,9 +3553,16 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
 #endif
         }
 #ifdef _VSMOD // patch m010. png background
-        else if(cmd == L"1img" || cmd == L"2img" || cmd == L"3img" || cmd == L"4img")
+        else if(cmd == L"1img" || cmd == L"2img" || cmd == L"3img" || cmd == L"4img"
+                || cmd == L"5img" || cmd == L"6img" || cmd == L"7img")
         {
-            int i = cmd[0] - '1';
+            /* \1img-\4img texture the matching channel with the wrapped 1:1
+             * sampler (mode 2). \5img-\7img are the fit modes: they always
+             * apply to the primary channel and scale the image against the
+             * line layout box instead (stretch / cover / contain). */
+            const int digit = cmd[0] - '0';
+            const int i = digit <= 4 ? digit - 1 : 0;
+            const int newMode = digit <= 4 ? 2 : digit;
 
             if(params.GetCount() >= 1)// file[,xoffset,yoffset[,angle]]
             {
@@ -3586,7 +3593,7 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                     }
                     if(t_init)
                     {
-                        style.mod_grad.mode[i] = 2;
+                        style.mod_grad.mode[i] = newMode;
                     }
                     else
                     {
@@ -3594,14 +3601,14 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                         MOD_PNGIMAGE t_temp;
                         if(t_temp.initImage(params[0])) // absolute path or default directory
                         {
-                            style.mod_grad.mode[i] = 2;
+                            style.mod_grad.mode[i] = newMode;
                             style.mod_grad.b_images[i] = t_temp;
                             mod_images.push_back(t_temp);
                         }
                         else
                         if(t_temp.initImage(fpath + params[0])) // path + relative path
                         {
-                            style.mod_grad.mode[i] = 2;
+                            style.mod_grad.mode[i] = newMode;
                             style.mod_grad.b_images[i] = t_temp;
                             mod_images.push_back(t_temp);
                         }

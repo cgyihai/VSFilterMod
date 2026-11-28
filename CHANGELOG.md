@@ -2,6 +2,26 @@
 
 **English** | [简体中文](CHANGELOG.zh-CN.md) | [日本語](CHANGELOG.ja.md) | [한국어](CHANGELOG.ko.md)
 
+## 1.20.0
+
+### New effect tags
+
+- \5img(file[,x,y]), \6img(file[,x,y]), \7img(file[,x,y]) -- image fit modes for
+  the primary fill channel, compatible with the AssRocket VSFilterMod
+  extension of the same name. Unlike \1img the image is not tiled 1:1 but
+  scaled against the overlay's own bounding box:
+  - \5img stretch: scales each axis independently to exactly fill the
+    box (the aspect ratio distorts)
+  - \6img cover: scales uniformly until the box is fully covered,
+    centered, cropping the overflow
+  - \7img contain: scales uniformly until the image fits inside the
+    box, centered, leaving the remaining margins transparent
+  The reference frame is the per-overlay (per-word) bounding box including
+  rasterisation padding, matching the reference renderer: separate words or
+  drawing runs each restart the fit. The optional x/y offsets still shift
+  the image in output pixels; out-of-range samples stay transparent instead
+  of wrapping; \imgscale does not apply to the fit modes.
+
 ## 1.19.2
 
 ### Packaging

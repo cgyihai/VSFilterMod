@@ -353,3 +353,24 @@ edit/write 工具直写，或 python 里用 chr(92) 拼接。写完用控制字�
   语义上是新功能，需求证据不足，优先级降档。
 - 收尾项（随时可做）：更广泛的性能 profile、更多标签的两树渲染输出位级
   交叉验证、csriapi 元数据完整性审计、README 示例图补全。
+
+## patch m028: 图像适配模式 \5img/\6img/\7img（v1.20.0 / Windows v2.21.0.0，已完成）
+
+- 逆向自 AssRocket VSFilterMod（闭源，UPX 加壳）：5=stretch 拉伸、6=cover 覆盖裁剪、
+  7=contain 适配留白，参照系为**逐 overlay（逐词）包围盒**（非 m025 行级），
+  每个词/绘图段各自重新适配——CSRI 双侧对照探针实证（rect pair 第二段 tex 归零重启）。
+- mode[i] 新值 5/6/7（仅 primary 通道，与 vanilla 1img-4img 通道语义不同）；
+  解析器统一进 1img-4img 分支按 digit 分派。覆盖/渐变标签对 mode 的处理与 mode 2 一致。
+- 实现：STS.cpp ComputeImageFitTransform + FitImageTextureCoord（clamp-to-edge：
+  边界恰好等于 texSize 时采边缘texel，cover/stretch 不留 1px 透明条）；
+  prepareImageTextureCache 与 getmixcolor 回退路径双实现；缓存 ImgTexX/Y 加 valid 标志，
+  越界返回 colorb=0（pixmix 下精确透明）。垂直方向：fit 坐标向下为正但行索引仍翻转
+  （内存 pointer[0] 是 PNG 底行）——探针证实否则纹理上下颠倒。
+- 已知语义偏差（记录为特性）：参照盒含光栅化填充（overlay 位图约 +1px/边，bor宽也会
+  撑大），故缩放比他版宽 ~10%；垂直居中我们的更干净（他的有字体度量偏移 quirk）。
+  cover 水平方向已与他逐值一致（probe maxdiff 1）。
+- \imgscale 不适用于 fit 模式；xoffset/yoffset 仍有效且会导致部分区域出界透明。
+- 测试 tests/img567.py：逐词重启镜像性、单调性、透明边距裁剪、通道隔离（border 蓝通道
+  判别）、xoffset。对照探针 %TEMP%\vsfm_probe567_compare.py 双侧跑。
+- Windows 移植方法：函数级预改文本两树完全一致处整体替换（git HEAD 快照校验锚定），
+  wcstol 适配 vsfm::WcsToL。

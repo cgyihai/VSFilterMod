@@ -159,6 +159,9 @@ public:
     long long   imgLineBottom8;
     long long   imgBaseX8;
     long long   imgBaseY8;
+    // patch m028. image fit modes: the line layout box dimensions in eighth
+    // pixels, injected beside imgLineLeft8/imgLineBottom8. \5img-\7img scale
+    // the texture against this box instead of sampling it 1:1.
 
     /* Per-overlay image texture sampling state. The horizontal texel indices
      * and fraction depend only on the output column; the vertical rows and
@@ -171,12 +174,17 @@ public:
         int x0bytes;
         int x1bytes;
         double fx;
+        /* false when the texture coordinate falls outside the image. Only
+         * the fit modes (\5img-\7img) produce those: unlike \1img-\4img they
+         * do not wrap, so out-of-range samples render transparent. */
+        bool valid;
     };
     struct ImgTexY
     {
         const BYTE* row0;
         const BYTE* row1;
         double fy;
+        bool valid;
     };
     std::vector<ImgTexX> imgTexX[4];
     std::vector<ImgTexY> imgTexY[4];

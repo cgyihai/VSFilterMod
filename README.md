@@ -308,6 +308,20 @@ decoded PNG rows share one contiguous allocation, texture coordinates are
 cached per overlay row/column, and exact integer or single-axis interpolation
 uses equivalent fast paths.
 
+### `\5img` / `\6img` / `\7img` — image fit modes
+
+Image fill modes compatible with the AssRocket VSFilterMod extension,
+scaling the PNG against the overlay's own bounding box instead of tiling
+it 1:1. `\5img` stretches each axis independently to exactly fill the
+box (distorting the aspect ratio), `\6img` scales uniformly to cover the
+box and center-crops the overflow, and `\7img` scales uniformly to fit
+inside the box and leaves the remaining margins transparent. The reference
+frame is the per-overlay (per-word) box, so separate words or drawing runs
+restart the fit; the optional `x,y` offsets still shift the image in output
+pixels, out-of-range samples render transparent instead of wrapping, and
+`\imgscale` does not apply to the fit modes.
+
+
 ### `\shadblur(radius)` / `\bordblur(radius)` — per-layer blur
 
 Gaussian blur applied to one layer only: the shadow / outline pass
