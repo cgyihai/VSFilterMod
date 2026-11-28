@@ -1928,6 +1928,10 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
     const int arcX0 = p.x;
     const int arcYBase = p.y + m_ascent;
 #endif
+#ifdef _VSMOD // patch m025. line-level image textures
+    const int imgLineLeft8 = p.x;
+    const int imgLineBottom8 = p.y + m_ascent + m_descent;
+#endif
 
     POSITION pos = GetHeadPosition();
     while(pos)
@@ -1957,6 +1961,8 @@ CRect CLine::PaintShadow(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPo
             w->m_style.mod_grad.subpixx = x & 7;
             w->m_style.mod_grad.subpixy = y & 7;
             w->m_style.mod_grad.fadalpha = alpha;
+            w->m_style.mod_grad.imgLineLeft8 = imgLineLeft8;
+            w->m_style.mod_grad.imgLineBottom8 = imgLineBottom8;
 #endif
 #ifdef _VSMOD // patch m017. arc text
             CPoint worg = org;
@@ -2056,6 +2062,10 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
     const int arcX0 = p.x;
     const int arcYBase = p.y + m_ascent;
 #endif
+#ifdef _VSMOD // patch m025. line-level image textures
+    const int imgLineLeft8 = p.x;
+    const int imgLineBottom8 = p.y + m_ascent + m_descent;
+#endif
 
     POSITION pos = GetHeadPosition();
     while(pos)
@@ -2100,6 +2110,8 @@ CRect CLine::PaintOutline(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CP
             w->m_style.mod_grad.subpixx = x & 7;
             w->m_style.mod_grad.subpixy = y & 7;
             w->m_style.mod_grad.fadalpha = alpha;
+            w->m_style.mod_grad.imgLineLeft8 = imgLineLeft8;
+            w->m_style.mod_grad.imgLineBottom8 = imgLineBottom8;
 #endif
 
 #ifdef _VSMOD // patch m017. arc text
@@ -2162,6 +2174,10 @@ CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoin
 #ifdef _VSMOD // patch m017. arc text
     const int arcX0 = p.x;
     const int arcYBase = p.y + m_ascent;
+#endif
+#ifdef _VSMOD // patch m025. line-level image textures
+    const int imgLineLeft8 = p.x;
+    const int imgLineBottom8 = p.y + m_ascent + m_descent;
 #endif
 
     POSITION pos = GetHeadPosition();
@@ -2258,6 +2274,8 @@ CRect CLine::PaintBody(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, CPoin
         w->m_style.mod_grad.subpixx = x & 7;
         w->m_style.mod_grad.subpixy = y & 7;
         w->m_style.mod_grad.fadalpha = alpha;
+        w->m_style.mod_grad.imgLineLeft8 = imgLineLeft8;
+        w->m_style.mod_grad.imgLineBottom8 = imgLineBottom8;
 #endif
 
         #ifdef _VSMOD // patch m017. arc text
@@ -3222,6 +3240,20 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
             params.Add(cmd.Mid(2)), cmd = cmd.Left(2);
         else if(!cmd.Find(L"iclip"))
             ;
+#ifdef _VSMOD // patch m025. line-level image textures: must precede the i prefix branch
+        else if(!cmd.Find(L"imgscale"))
+        {
+            if(cmd.GetLength() > 8)
+            {
+                const WCHAR suffixStart = cmd[8];
+                if((suffixStart >= '0' && suffixStart <= '9') || suffixStart == '-' || suffixStart == '+' || suffixStart == '.')
+                {
+                    params.Add(cmd.Mid(8));
+                    cmd = cmd.Left(8);
+                }
+            }
+        }
+#endif
 #ifdef _VSMOD // patch m014. inner glow family: must precede the i prefix branch;
                // mblur has no conflicting prefix and lives here for tidiness
         else if(!cmd.Find(L"iglowc"))
@@ -3560,6 +3592,29 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                                                          ? CalcAnimation(vsfm::WcsToL(params[2], NULL, 10), style.mod_grad.b_images[i].yoffset, fAnimate)
                                                          : org.mod_grad.b_images[i].yoffset;
                 }
+            }
+        }
+#endif
+#ifdef _VSMOD // patch m025. line-level image textures
+        else if(cmd == L"imgscale")
+        {
+            if(params.GetCount() > 0)
+            {
+                double sx = fabs(vsfm::WcsToD(params[0], NULL));
+                double sy = params.GetCount() > 1 ? fabs(vsfm::WcsToD(params[1], NULL)) : sx;
+                if(!(sx > 0)) sx = 1;
+                if(!(sy > 0)) sy = 1;
+                if(sx < 1.0 / 256.0) sx = 1.0 / 256.0;
+                if(sy < 1.0 / 256.0) sy = 1.0 / 256.0;
+                if(sx > 256.0) sx = 256.0;
+                if(sy > 256.0) sy = 256.0;
+                style.mod_grad.imgScaleX = CalcAnimation(sx, style.mod_grad.imgScaleX, fAnimate);
+                style.mod_grad.imgScaleY = CalcAnimation(sy, style.mod_grad.imgScaleY, fAnimate);
+            }
+            else
+            {
+                style.mod_grad.imgScaleX = org.mod_grad.imgScaleX;
+                style.mod_grad.imgScaleY = org.mod_grad.imgScaleY;
             }
         }
 #endif

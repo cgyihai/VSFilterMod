@@ -265,12 +265,32 @@ expands, far end compresses); large distances approach the
 orthogonal look of legacy ASS. `\persp0` restores the legacy
 projection; `\t` animates.
 
+### Line-continuous image fills and `\imgscale(sx[,sy])`
+
+`\1img`–`\4img` PNG fills now sample in line-level screen
+coordinates rather than restarting the texture at every word's
+overlay box, so a tiled image flows continuously across all words on
+the line and remains stable under rectangular clipping. The legacy
+image argument order `file,xoffset,yoffset[,angle]` is unchanged.
+
+`\imgscale(sx[,sy])` divides texture sample coordinates before
+wrapping: `2` magnifies the texture twofold, `0.5` shrinks it
+twofold. Omitting `sy` uses `sx` for both axes; negative values use
+their magnitude, zero or invalid input restores 1:1, and values are
+clamped to [1/256,256]. `\imgscale0` is the compact reset form;
+`\t` animation is supported.
+
+Image storage and sampling are optimized without changing output pixels:
+decoded PNG rows share one contiguous allocation, texture coordinates are
+cached per overlay row/column, and exact integer or single-axis interpolation
+uses equivalent fast paths.
+
 ### `\shadblur(radius)` / `\bordblur(radius)` — per-layer blur
 
 Gaussian blur applied to one layer only: the shadow / outline pass
 re-rasterizes the overlay with the layer radius added to the base
 `\blur`. Crisp body with diffused shadow, or soft border over sharp
-fill. Compact form `\shadblur4`, `	` animation, zero disables.
+fill. Compact form `\shadblur4`, `\t` animation, zero disables.
 
 ### `\mgrad(c1,c2[,c3,...])` — multi-stop gradient
 

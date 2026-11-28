@@ -24,6 +24,7 @@
 #include "../compat/det_float.h"
 #include "../font/font_engine.h"
 #include <fstream>
+#include <new>
 
 /* Was in GFN.h, next to the external-subtitle finder. */
 const TCHAR* exttypestr[] =
@@ -3898,6 +3899,8 @@ bool MOD_GRADIENT::operator == (MOD_GRADIENT& mg)
             && radialScale == mg.radialScale
             && radialCx == mg.radialCx
             && radialCy == mg.radialCy
+            && imgScaleX == mg.imgScaleX
+            && imgScaleY == mg.imgScaleY
             && b_images[0] == mg.b_images[0]
             && b_images[1] == mg.b_images[1]
             && b_images[2] == mg.b_images[2]
@@ -3933,6 +3936,17 @@ void MOD_GRADIENT::clear()
     multiEnabled = false;
     multiCount = 0;
     memset(&multiColor, 0, sizeof(multiColor));
+    imgScaleX = 1;
+    imgScaleY = 1;
+    imgLineLeft8 = 0;
+    imgLineBottom8 = 0;
+    imgBaseX8 = 0;
+    imgBaseY8 = 0;
+    for(int ci = 0; ci < 4; ci++)
+    {
+        imgTexX[ci].clear();
+        imgTexY[ci].clear();
+    }
 }
 
 #include <math.h>
@@ -3961,9 +3975,93 @@ static inline DWORD EvalMultiStops(const COLORREF* stops, int n, double t)
 }
 #endif
 
+#ifdef _VSMOD // patch m025. line-level image textures
+static double WrapImageTextureCoord(double v, int size)
+{
+    double wrapped = v - floor(v / size) * size;
+    if(wrapped >= size) wrapped -= size;
+    if(wrapped < 0) wrapped += size;
+    return wrapped;
+}
+
+static inline int SampleImageTextureChannel(MOD_PNGIMAGE& image, int x, int y, int channel)
+{
+    const BYTE* pixel = image.pointer[image.height - 1 - y] + x * image.bpp;
+    return channel < 3 || image.bpp == 4 ? pixel[channel] : 0xff;
+}
+
+static inline DWORD ClampImageTextureChannel(double v)
+{
+    if(v < 0) return 0;
+    if(v > 255) return 255;
+    return (DWORD)v;
+}
+#endif
+
+void MOD_GRADIENT::prepareImageTextureCache(int drawWidth, int drawHeight)
+{
+    for(int ci = 0; ci < 4; ci++)
+    {
+        imgTexX[ci].clear();
+        imgTexY[ci].clear();
+    }
+    if(drawWidth <= 0 || drawHeight <= 0) return;
+
+    for(int channel = 0; channel < 4; channel++)
+    {
+        if(mode[channel] != 2) continue;
+
+        MOD_PNGIMAGE& image = b_images[channel];
+        if(!image.pointer || image.width <= 0 || image.height <= 0 || image.bpp <= 0) continue;
+
+        try
+        {
+            imgTexX[channel].resize((size_t)drawWidth);
+            imgTexY[channel].resize((size_t)drawHeight);
+        }
+        catch (...)
+        {
+            imgTexX[channel].clear();
+            imgTexY[channel].clear();
+            continue;
+        }
+
+        const double scaleX = imgScaleX != 0 ? imgScaleX : 1;
+        const double scaleY = imgScaleY != 0 ? imgScaleY : 1;
+        for(int drawX = 0; drawX < drawWidth; drawX++)
+        {
+            const int adjustedX = drawX + xoffset;
+            const long long lineX8 = (long long)adjustedX * 8 + imgBaseX8;
+            const double texX =
+                WrapImageTextureCoord(((double)lineX8 / 8.0 + image.xoffset) / scaleX, image.width);
+            const int x0 = (int)floor(texX);
+            const int x1 = x0 + 1 < image.width ? x0 + 1 : 0;
+            ImgTexX& xc = imgTexX[channel][(size_t)drawX];
+            xc.x0bytes = x0 * image.bpp;
+            xc.x1bytes = x1 * image.bpp;
+            xc.fx = texX - x0;
+        }
+        for(int drawY = 0; drawY < drawHeight; drawY++)
+        {
+            const int adjustedY = drawY + clipDiff;
+            const long long lineY8 = (long long)adjustedY * 8 + imgBaseY8;
+            const double texY =
+                WrapImageTextureCoord(((double)lineY8 / 8.0 + image.yoffset) / scaleY, image.height);
+            const int y0 = (int)floor(texY);
+            const int y1 = y0 + 1 < image.height ? y0 + 1 : 0;
+            ImgTexY& yc = imgTexY[channel][(size_t)drawY];
+            yc.row0 = image.pointer[image.height - 1 - y0];
+            yc.row1 = image.pointer[image.height - 1 - y1];
+            yc.fy = texY - y0;
+        }
+    }
+}
+
 DWORD MOD_GRADIENT::getmixcolor(int tx, int ty, int i) // too slow T.T
 {
     DWORD colorb = 0;
+    const int drawX = tx;
+    const int drawY = ty;
     tx += xoffset;
     // gradient
     if(mode[i] == 1)
@@ -4071,53 +4169,104 @@ DWORD MOD_GRADIENT::getmixcolor(int tx, int ty, int i) // too slow T.T
     // png background
     if(mode[i] == 2)
     {
-        // unwarp
-        tx += b_images[i].xoffset;
-        ty += b_images[i].yoffset;
         ty += clipDiff;
-        while(tx > b_images[i].width - 1) tx -= b_images[i].width;
-        while(ty > b_images[i].height - 1) ty -= b_images[i].height;
-        while(tx < 0) tx += b_images[i].width;
-        while(ty < 0) ty += b_images[i].height;
-        // now tx and ty are valid array indexes
-        // rows are inverted last,...,n,...,1,0
-        bool nlastpixx = (tx > 0);
-        bool nlastpixy = (ty < b_images[i].height - 1);
-        BYTE* dst11 = b_images[i].pointer[b_images[i].height - 1 - ty] + tx * b_images[i].bpp;
-        BYTE* dst12 = (nlastpixx) ? b_images[i].pointer[b_images[i].height - 1 - ty] + (tx - 1) * b_images[i].bpp : NULL;
-        BYTE* dst21 = (nlastpixy) ? b_images[i].pointer[b_images[i].height - ty - 2] + tx * b_images[i].bpp : NULL;
-        BYTE* dst22 = (nlastpixx && nlastpixy) ? b_images[i].pointer[b_images[i].height - ty - 2] + (tx - 1) * b_images[i].bpp : NULL;
-        BYTE r = dst11[0];
-        BYTE g = dst11[1];
-        BYTE b = dst11[2];
-        BYTE a = (b_images[i].bpp == 4) ? dst11[3] : 0xFF;
-        // subpixel positioning
-        if(nlastpixx && !nlastpixy) // last row
+
+        MOD_PNGIMAGE& image = b_images[i];
+        int x0bytes, x1bytes;
+        const BYTE* row0;
+        const BYTE* row1;
+        double fx, fy;
+        if((size_t)drawX < imgTexX[i].size() && (size_t)drawY < imgTexY[i].size())
         {
-            r = (r * (8 - subpixx) + dst12[0] * subpixx) >> 3;
-            g = (g * (8 - subpixx) + dst12[1] * subpixx) >> 3;
-            b = (b * (8 - subpixx) + dst12[2] * subpixx) >> 3;
-            a = (b_images[i].bpp == 4) ? (a * (8 - subpixx) + dst12[3] * subpixx) >> 3 : 0xFF;
+            const ImgTexX& xc = imgTexX[i][(size_t)drawX];
+            const ImgTexY& yc = imgTexY[i][(size_t)drawY];
+            x0bytes = xc.x0bytes;
+            x1bytes = xc.x1bytes;
+            row0 = yc.row0;
+            row1 = yc.row1;
+            fx = xc.fx;
+            fy = yc.fy;
         }
-        else if(nlastpixy && !nlastpixx) // last col
+        else
         {
-            r = (r * (subpixy) + dst21[0] * (8 - subpixy)) >> 3;
-            g = (g * (subpixy) + dst21[1] * (8 - subpixy)) >> 3;
-            b = (b * (subpixy) + dst21[2] * (8 - subpixy)) >> 3;
-            a = (b_images[i].bpp == 4) ? (a * (subpixy) + dst21[3] * (8 - subpixy)) >> 3 : 0xFF;
+            /* Fallback for callers that did not prepare the per-overlay cache.
+             * This is the original per-pixel coordinate computation. */
+            const long long lineX8 = (long long)tx * 8 + imgBaseX8;
+            const long long lineY8 = (long long)ty * 8 + imgBaseY8;
+            const double scaleX = imgScaleX != 0 ? imgScaleX : 1;
+            const double scaleY = imgScaleY != 0 ? imgScaleY : 1;
+            const double texX = WrapImageTextureCoord(((double)lineX8 / 8.0 + image.xoffset) / scaleX, image.width);
+            const double texY = WrapImageTextureCoord(((double)lineY8 / 8.0 + image.yoffset) / scaleY, image.height);
+            const int x0 = (int)floor(texX);
+            const int y0 = (int)floor(texY);
+            const int x1 = x0 + 1 < image.width ? x0 + 1 : 0;
+            const int y1 = y0 + 1 < image.height ? y0 + 1 : 0;
+            x0bytes = x0 * image.bpp;
+            x1bytes = x1 * image.bpp;
+            row0 = image.pointer[image.height - 1 - y0];
+            row1 = image.pointer[image.height - 1 - y1];
+            fx = texX - x0;
+            fy = texY - y0;
         }
-        else if(nlastpixy && nlastpixx)
+
+        const BYTE* p00 = row0 + x0bytes;
+        const BYTE* p10 = row0 + x1bytes;
+        const BYTE* p01 = row1 + x0bytes;
+        const BYTE* p11 = row1 + x1bytes;
+
+        DWORD channels[4] = {0, 0, 0, 0};
+        if(fx == 0 && fy == 0)
         {
-            // T.T
-            r = (((dst21[0] * (8 - subpixx) + dst22[0] * subpixx) >> 3) * (subpixy) + ((r * (8 - subpixx) + dst12[0] * subpixx) >> 3) * (8 - subpixy)) >> 3;
-            g = (((dst21[1] * (8 - subpixx) + dst22[1] * subpixx) >> 3) * (subpixy) + ((g * (8 - subpixx) + dst12[1] * subpixx) >> 3) * (8 - subpixy)) >> 3;
-            b = (((dst21[2] * (8 - subpixx) + dst22[2] * subpixx) >> 3) * (subpixy) + ((b * (8 - subpixx) + dst12[2] * subpixx) >> 3) * (8 - subpixy)) >> 3;
-            a = (b_images[i].bpp == 4) ? (((dst21[3] * (8 - subpixx) + dst22[3] * subpixx) >> 3) * (subpixy) + ((a * (8 - subpixx) + dst12[3] * subpixx) >> 3) * (8 - subpixy)) >> 3 : 0xFF;
+            /* Exact integral texel: every other bilinear weight is exactly 0
+             * and the c00 weight exactly 1, so this shortcut is bit-identical. */
+            for(int channel = 0; channel < 4; channel++)
+                channels[channel] = channel < 3 || image.bpp == 4 ? p00[channel] : 0xff;
         }
-        // alpha fix
+        else if(fx == 0)
+        {
+            /* Vertical-only interpolation. Removing the terms multiplied by
+             * exact zero does not change the IEEE result. */
+            const double w0 = 1 - fy;
+            const double w1 = fy;
+            for(int channel = 0; channel < 4; channel++)
+            {
+                const double c00 = channel < 3 || image.bpp == 4 ? p00[channel] : 0xff;
+                const double c01 = channel < 3 || image.bpp == 4 ? p01[channel] : 0xff;
+                channels[channel] = ClampImageTextureChannel(c00 * w0 + c01 * w1);
+            }
+        }
+        else if(fy == 0)
+        {
+            /* Horizontal-only interpolation, likewise bit-identical to the
+             * four-corner expression with two exact-zero terms. */
+            const double w0 = 1 - fx;
+            const double w1 = fx;
+            for(int channel = 0; channel < 4; channel++)
+            {
+                const double c00 = channel < 3 || image.bpp == 4 ? p00[channel] : 0xff;
+                const double c10 = channel < 3 || image.bpp == 4 ? p10[channel] : 0xff;
+                channels[channel] = ClampImageTextureChannel(c00 * w0 + c10 * w1);
+            }
+        }
+        else
+        {
+            const double w00 = (1 - fx) * (1 - fy);
+            const double w10 = fx * (1 - fy);
+            const double w01 = (1 - fx) * fy;
+            const double w11 = fx * fy;
+            for(int channel = 0; channel < 4; channel++)
+            {
+                const double c00 = channel < 3 || image.bpp == 4 ? p00[channel] : 0xff;
+                const double c10 = channel < 3 || image.bpp == 4 ? p10[channel] : 0xff;
+                const double c01 = channel < 3 || image.bpp == 4 ? p01[channel] : 0xff;
+                const double c11 = channel < 3 || image.bpp == 4 ? p11[channel] : 0xff;
+                channels[channel] = ClampImageTextureChannel(c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11);
+            }
+        }
+
 #define div_255_fast(x) (((x) + 1 + (((x) + 1) >> 8)) >> 8)
-        BYTE al = div_255_fast(div_255_fast(a * b_images[i].alpha) * (0xff - fadalpha));
-        colorb = al << 24 | r << 16 | g << 8 | b;
+        BYTE al = div_255_fast(div_255_fast(channels[3] * image.alpha) * (0xff - fadalpha));
+        colorb = al << 24 | channels[0] << 16 | channels[1] << 8 | channels[2];
 
         return colorb;
     }

@@ -1,8 +1,63 @@
 # Changelog
 
-**English** | [简体中文](CHANGELOG.zh-CN.md)
+**English** | [简体中文](CHANGELOG.zh-CN.md) | [日本語](CHANGELOG.ja.md) | [한국어](CHANGELOG.ko.md)
 
-## Unreleased
+## 1.17.0
+
+### Line-continuous image fills and `\imgscale`
+
+- `\1img`–`\4img` PNG fills now sample in line-level screen coordinates,
+  so textures flow continuously across word boundaries instead of restarting
+  at each word's overlay box. Sampling preserves eighth-pixel word positions,
+  rectangular clipping keeps the texture anchored, and the legacy image
+  argument order `file,xoffset,yoffset[,angle]` is unchanged.
+- Added `\imgscale(sx[,sy])`: texture sample coordinates are divided by the
+  scale before wrapping. `2` magnifies the texture twofold, `0.5` shrinks it
+  twofold; omitting `sy` uses `sx` for both axes. Negative values use their
+  magnitude, zero or invalid input restores 1:1, values clamp to
+  [1/256,256], `\imgscale0` is the compact reset form, and `\t` animation is
+  supported. TypeSub tag metadata includes the new tag. Regression suite
+  tests/img.py verifies cross-word continuity, line anchoring, scaling,
+  legacy offsets, rectangular clipping and deterministic output.
+
+### Output-preserving performance and memory work
+
+- Decoded PNG fills now use one contiguous shared pixel allocation instead of
+  independently allocated rows. The subtitle image cache uses ordinary C++
+  container ownership, embedded PNG input is bounds-checked, and closing or
+  emptying a subtitle instance drops its references to decoded image memory.
+- The image sampler precomputes invariant horizontal and vertical texture
+  coordinates once per overlay axis and uses exact integer/single-axis
+  bilinear fast paths. Coordinate arithmetic, rounding, alpha compositing and
+  clipping order are unchanged.
+- Matte/echo event canvases and glow/inner-glow plane buffers reuse
+  renderer-owned scratch storage while those effects are active. Scratch
+  memory is released when the effects become inactive or the renderer is
+  deinitialized.
+- Fixed Windows-only compact `\imgscale2` parsing so it matches the
+  parenthesized form and the cross-platform renderer.
+- In a 640x360 development stress probe with twenty overlapping full-frame
+  events, median `\1img` rendering time fell from about 2.68 s to 0.61 s and
+  `\imgscale2` from about 2.73 s to 0.91 s; results are workload-dependent.
+  Seven image/effect scenarios remained bit-identical, the full cross-platform
+  suite passed 25 tests with one environment-dependent VapourSynth skip, and
+  seven cross-tree CSRI image/effect frames were byte-identical.
+
+### Editor tag metadata file
+
+- Builds now emit `vsfiltermod-tags.json` next to the renderer outputs:
+  the same UTF-8 JSON document the plugin exports through
+  `csri_typesub_tags_json()`, written as a plain file so editors can merge
+  this build's extension tags into autocompletion with simple file IO
+  instead of plugin symbol lookup. Either channel only has to be
+  implemented once; adding or updating a tag never requires a synchronous
+  editor release. The embedded document is validated at build time, and
+  the typesub-tags test byte-compares the file against the built plugin's
+  actual export.
+- Fixed Windows-only corruption of the exported document: the BOM-less
+  UTF-8 source was being compiled with the system codepage, so individual
+  non-ASCII help characters in the JSON became '?' in the DLL export.
+  csriapi.cpp now compiles with /utf-8.
 
 ### New renderer feature
 

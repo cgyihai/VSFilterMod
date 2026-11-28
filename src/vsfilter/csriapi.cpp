@@ -427,6 +427,11 @@ CSRIAPI const char *csri_typesub_tags_json(void)
       "help": "次要填充位图"
     },
     {
+      "name": "imgscale",
+      "signature": "\\imgscale(sx[,sy])",
+      "help": "位图填充缩放；sy 省略时等于 sx，\\imgscale0 恢复 1:1"
+    },
+    {
       "name": "1vc",
       "signature": "\\1vc(&Hc1&,&Hc2&,&Hc3&,&Hc4&)",
       "help": "主体四角渐变色"

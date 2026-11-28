@@ -1162,7 +1162,7 @@ void Rasterizer::Draw_Alpha_sp_noBody(RasterizerNfo& rnfo)
 void Rasterizer::Draw_Grad_noAlpha_spFF_Body(RasterizerNfo& rnfo)
 {
     double hfull = (double)rnfo.h;
-    MOD_GRADIENT mod_grad = rnfo.mod_grad;
+    MOD_GRADIENT& mod_grad = rnfo.mod_grad;
     int typ = rnfo.typ;
 
     BYTE* s = rnfo.s;
@@ -1182,7 +1182,7 @@ void Rasterizer::Draw_Grad_noAlpha_spFF_Body(RasterizerNfo& rnfo)
 void Rasterizer::Draw_Grad_noAlpha_spFF_noBody(RasterizerNfo& rnfo)
 {
     double hfull = (double)rnfo.h;
-    MOD_GRADIENT mod_grad = rnfo.mod_grad;
+    MOD_GRADIENT& mod_grad = rnfo.mod_grad;
     int typ = rnfo.typ;
 
     BYTE* src = rnfo.src;
@@ -1203,7 +1203,7 @@ void Rasterizer::Draw_Grad_noAlpha_spFF_noBody(RasterizerNfo& rnfo)
 void Rasterizer::Draw_Grad_noAlpha_sp_Body(RasterizerNfo& rnfo)
 {
     double hfull = (double)rnfo.h;
-    MOD_GRADIENT mod_grad = rnfo.mod_grad;
+    MOD_GRADIENT& mod_grad = rnfo.mod_grad;
 
     BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
@@ -1225,7 +1225,7 @@ void Rasterizer::Draw_Grad_noAlpha_sp_Body(RasterizerNfo& rnfo)
 void Rasterizer::Draw_Grad_noAlpha_sp_noBody(RasterizerNfo& rnfo)
 {
     double hfull = (double)rnfo.h;
-    MOD_GRADIENT mod_grad = rnfo.mod_grad;
+    MOD_GRADIENT& mod_grad = rnfo.mod_grad;
 
     BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
@@ -1250,7 +1250,7 @@ void Rasterizer::Draw_Grad_Alpha_spFF_Body(RasterizerNfo& rnfo)
     double hfull = (double)rnfo.h;
     BYTE* s = rnfo.s;
     DWORD* dst = rnfo.dst;
-    MOD_GRADIENT mod_grad = rnfo.mod_grad;
+    MOD_GRADIENT& mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 
     int typ = rnfo.typ;
@@ -1271,7 +1271,7 @@ void Rasterizer::Draw_Grad_Alpha_spFF_noBody(RasterizerNfo& rnfo)
     double hfull = (double)rnfo.h;
     BYTE* src = rnfo.src;
     DWORD* dst = rnfo.dst;
-    MOD_GRADIENT mod_grad = rnfo.mod_grad;
+    MOD_GRADIENT& mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 
     int typ = rnfo.typ;
@@ -1289,7 +1289,7 @@ void Rasterizer::Draw_Grad_Alpha_spFF_noBody(RasterizerNfo& rnfo)
 void Rasterizer::Draw_Grad_Alpha_sp_Body(RasterizerNfo& rnfo)
 {
     double hfull = (double)rnfo.h;
-    MOD_GRADIENT mod_grad = rnfo.mod_grad;
+    MOD_GRADIENT& mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 
     BYTE* s = rnfo.s;
@@ -1312,7 +1312,7 @@ void Rasterizer::Draw_Grad_Alpha_sp_Body(RasterizerNfo& rnfo)
 void Rasterizer::Draw_Grad_Alpha_sp_noBody(RasterizerNfo& rnfo)
 {
     double hfull = (double)rnfo.h;
-    MOD_GRADIENT mod_grad = rnfo.mod_grad;
+    MOD_GRADIENT& mod_grad = rnfo.mod_grad;
     MOD_MOVEVC mod_vc = rnfo.mod_vc;
 
     BYTE* src = rnfo.src;
@@ -1433,6 +1433,19 @@ CRect Rasterizer::Draw(SubPicDesc& spd, CRect& clipRect, BYTE* pAlphaMask, int x
     rnfo.mod_grad.yoffset = yo;
     rnfo.typ = typ;
     rnfo.mod_grad.clipDiff = clipRect.bottom < yBeforeClip + mOverlayHeight ? yBeforeClip + mOverlayHeight - clipRect.bottom : 0;
+    /* xsub/ysub carry the word's absolute screen position in eighth pixels;
+     * mOffset* subtracted the rasterisation phase when the overlay was built,
+     * so add the low three bits back to recover the continuous overlay origin.
+     * Using the already rounded x/y here would quantise that position away. */
+    const int64_t overlayLeft8 = (int64_t)xsub + mOffsetX + (xsub & 7);
+    const int64_t overlayBottom8 = (int64_t)ysub + mOffsetY + (ysub & 7) + (int64_t)(mOverlayHeight - 1) * 8;
+    rnfo.mod_grad.imgBaseX8 = overlayLeft8 - rnfo.mod_grad.imgLineLeft8;
+    rnfo.mod_grad.imgBaseY8 = rnfo.mod_grad.imgLineBottom8 - overlayBottom8;
+    /* The horizontal texture coordinate is invariant down a column and the
+     * vertical one invariant across a row. Precomputing those two axes once
+     * for this clipped overlay is bit-identical and removes the expensive
+     * wrap/scale computation from the per-pixel loop. */
+    rnfo.mod_grad.prepareImageTextureCache(w, h);
 #else
     // The complex "vector clip mask" I think.
     rnfo.am = pAlphaMask + spd.w * y + x;

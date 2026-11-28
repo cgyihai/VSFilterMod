@@ -22,6 +22,8 @@
 #pragma once
 
 #include <functional>
+#include <memory>
+#include <vector>
 
 #include "../compat/vsfm_compat.h"
 #include "TextFile.h"
@@ -134,6 +136,38 @@ public:
 
     BYTE		img_alpha;
 
+    // patch m025. line-level image textures: imgScale* are persistent style
+    // parameters. The other four values are per-line/per-draw renderer state:
+    // the line layout anchor is in eighth pixels, while the base values are
+    // computed against the unclipped overlay's integer screen position.
+    double      imgScaleX;
+    double      imgScaleY;
+    long long   imgLineLeft8;
+    long long   imgLineBottom8;
+    long long   imgBaseX8;
+    long long   imgBaseY8;
+
+    /* Per-overlay image texture sampling state. The horizontal texel indices
+     * and fraction depend only on the output column; the vertical rows and
+     * fraction depend only on the output row. Computing them once per axis
+     * instead of once per pixel is bit-identical because each element uses
+     * exactly the same double expression as before. These are renderer scratch
+     * data, not persistent style state. */
+    struct ImgTexX
+    {
+        int x0bytes;
+        int x1bytes;
+        double fx;
+    };
+    struct ImgTexY
+    {
+        const BYTE* row0;
+        const BYTE* row1;
+        double fy;
+    };
+    std::vector<ImgTexX> imgTexX[4];
+    std::vector<ImgTexY> imgTexY[4];
+
 // for background image
     MOD_PNGIMAGE	b_images[4];
 
@@ -143,6 +177,7 @@ public:
     bool operator == (MOD_GRADIENT& mg);
 
     void clear();
+    void prepareImageTextureCache(int drawWidth, int drawHeight);
     DWORD getmixcolor(int tx, int ty, int i);
 };
 #endif

@@ -216,32 +216,120 @@ edit/write 工具直写，或 python 里用 chr(92) 拼接。写完用控制字�
   渲染期混合结构上不可能；CSRI ABI 只输出 RGBA，预览必然错误（违反 WYSIWYG），
   Windows DirectShow 单树可做但破坏两树对等——投入产出比不成立。
 
-## 候选史诗 1 预分析：\img 系列强化（已完成侦察，未实施）
+## patch m025: 行级图像纹理与 \imgscale（v1.17.0 / Windows v2.18.0，已完成）
 
-现状（patch m010，\1img-\4img 已存在）：
-- PNG 填充采样在 STS.cpp getmixcolor 的 mode[i]==2 分支：已有环绕平铺
-  （while 循环 wrap）+ 双线性亚像素插值 + xoffset/yoffset/angle 参数。
-- **关键发现（改变设计）**：getmixcolor(wt, h, typ) 的 wt/h 来自 Rasterizer.cpp
-  的**逐词 overlay 光栅坐标**——纹理坐标空间是每个词的 bbox，平铺在词边界
-  重启，纹理不能跨词连续流动。渐变同理（x=tx/width 是逐词归一化）。
-  这意味着：
-  a) 强化清单第一项应该是**行级纹理坐标**（把词 overlay 的屏幕偏移传进
-     getmixcolor 或 rnfo，tx/ty 加上该偏移），否则缩放/平铺在小字号多词
-     文本上视觉破碎；
-  b) 渐变标签（vgrad/rgrad/mgrad）目前也是逐词归一化——这是既有语义，
-     改动会破坏兼容，只能给 img 新增模式，不动渐变。
-- 设计草案（供实施者）：
-  * 新标签 \imgscale(sx[,sy]) 或扩展 \1img 括号参数末尾加 sx,sy——
-    注意 legacy 参数顺序 file,xoffset,yoffset[,angle] 已被脚本依赖，
-    只能尾部追加；采样时 tx/=sx, ty/=sy（除法在 wrap 之前）。
-  * 行级坐标：rnfo 增加 overlay 屏幕原点偏移字段，在 RTS.cpp 三 pass
-    Rasterize 调用处填入；getmixcolor 的 mode==2 分支加回偏移。
-    逐词 bbox 偏移在 CWord::Paint 的 p 参数（1/8 像素）——注意单位换算。
-  * 测试：单字符纹理色标定位、跨词连续性（两词相邻处纹理无缝）、
-    缩放比例验证、确定性。
+- `\1img`-`\4img` PNG 填充改为行级屏幕坐标采样，纹理跨词连续；新增
+  `\imgscale(sx[,sy])`，在环绕平铺前除算采样坐标。两树均已移植。
+- **坐标陷阱**：Rasterizer::Draw 的 `xsub/ysub` 形参实际是词绘制的
+  绝对屏幕位置（1/8 像素），不是单纯亚像素相位；`mOffsetX/Y` 在
+  Rasterize 时扣除了低 3 位相位。连续 overlay 原点必须写成
+  `xsub + mOffsetX + (xsub & 7)`（y 同理），才能恢复 `CWord::Paint`
+  传入的完整 1/8 像素屏幕偏移；已取整的 `x/y` 只能用于裁剪，不能作为
+  纹理坐标原点。不要按 legacy `subpixx/subpixy` 的采样方向“修正”符号。
+- 裁剪补偿：`getmixcolor` 函数体开头已有 `tx += xoffset`，mode==2 内不得
+  重复加；垂直方向因 `ty` 是自底向上的行索引，顶部裁剪不需要加 `yoffset`，
+  底部裁剪仍由既有 `clipDiff` 补偿。重复加会导致矩形裁剪恰好平移纹理。
+- 采样器现在用 double 连续坐标统一环绕+双线性插值；纵向仍按 PNG 倒置行
+  读取。`imgScaleX/Y` 是持久样式状态，`imgLine*`/`imgBase*` 是逐 pass
+  渲染状态，必须参与 clear/相等比较但不要让渲染状态回流到样式重置。
+- `\imgscale`：sy 省略等于 sx；0/非法输入恢复 1:1；负值取绝对值；
+  钳制 [1/256,256]；支持 `\t`。legacy `\1img(file,xoffset,yoffset[,angle])`
+  参数顺序不变。
+- tests/img.py 验证跨词连续性、行锚定移动、等比/各向异性缩放、0/负/非法
+  值、legacy xoffset、矩形裁剪稳定性与确定性。跨平台全套件 25 通过 1 跳过；
+  Windows `Release (MOD)|x64` 解决方案构建通过。
+
+## patch m026: 输出不变的图像/特效性能与内存优化（v1.18.0 / Windows v2.19.0，已完成）
+
+- PNG 所有权：`MOD_PNGPIXELS` 由行指针表 `rows` 加单块连续像素 `data`
+  组成，`MOD_PNGIMAGE::pixels` 以 `shared_ptr` 共享所有权；`pointer` 只是
+  指向行表的非 owning alias。样式、词副本与 `mod_images` 缓存可以安全共享
+  同一解码图像，最后一个引用销毁时才释放。`freeImage()` 只放弃当前引用，
+  绝不能恢复逐行 `free()`。
+- `mod_images` 两树均为 `std::vector<MOD_PNGIMAGE>`。不要改回 Windows 原生
+  `CAtlArray<MOD_PNGIMAGE>`：ATL `GrowBuffer` 用 memmove 搬移元素并明确不调用
+  旧元素析构，形式上不适合含 `shared_ptr` 的非平凡对象。两树
+  `CSimpleTextSubtitle::Empty()` 都必须 `mod_images.clear()`。
+- 内嵌 PNG 解码入口是带长度的 `initImage(BYTE*, size_t, CString)`；
+  `MOD_PNGMEMSRC` 保存当前指针与 end 指针，libpng 回调越界即报错。不要恢复
+  旧的无长度游标，否则截断 PNG 会越界读宿主字幕内存。libpng 错误经 longjmp
+  跳过局部 C++ 析构，所以 `png_read_image` 前所有权必须已经转移到成员
+  `pixels`，setjmp 错误路径再 `freeImage()`。
+- 图像采样缓存只在 `Rasterizer::Draw` 确定当前 clipped overlay 后准备。
+  横向缓存必须使用已加过一次 `xoffset` 的列坐标，纵向缓存必须使用已加
+  `clipDiff` 的行坐标；每个缓存元素都必须保留与原逐像素路径完全相同的
+  double 表达式。`prepareImageTextureCache` 先清空四通道缓存，不要把缓存
+  跨 overlay、跨图像实例或跨帧复用。
+- 快速路径只允许在 `fx == 0` 或 `fy == 0` 的精确零权重时删除对应项；
+  这些项是精确 +0，删除不改变 IEEE 结果。通用双线性分支的表达式顺序
+  `c00*w00 + c10*w10 + c01*w01 + c11*w11` 不得重排，不得改 float、FMA、
+  fast-math、固定点或近似插值。
+- 跨平台 8 个、Windows 16 个 `Draw_Grad_*` helper 使用 `MOD_GRADIENT&`，
+  不能恢复按值拷贝：拷贝会连同四个通道的坐标缓存一起复制，抵消优化。
+  helper 本身不修改该对象。
+- matte/echo/glow scratch 复用只复用容量，不携带语义状态：每个事件/平面
+  使用前都会 `assign/clear` 重置。matte pool 必须是
+  `std::vector<std::unique_ptr<MatteScratchBuffers>>`，因为 `MatteLayerState`
+  持有 pool 内部 vector 的指针；若改成直接存放对象的 vector，扩容搬移会使
+  指针失效。事件合成必须在下一次复用同一 event scratch 前完成。
+- scratch 释放策略：`ReleaseRenderingScratch()` 在 Deinit 与无字幕段时释放；
+  Render 末尾若本帧未使用 event/glow scratch 则释放对应容量，matte pool 收缩到
+  本帧实际使用数。这是内存驻留与分配复用的折中，不影响像素语义。
+- Windows 移植补齐了 `\imgscale2` 紧凑后缀归一化；该块必须位于 `\i` 前缀
+  分支之前。跨树 CSRI 对比曾发现 Windows 忽略紧凑形式而括号形式正常，
+  这类解析差异不能仅靠跨平台测试发现。
+- 验证：7 个图像/特效场景与优化前 manifest 位级一致；跨平台 Meson 25 通过、
+  0 失败、1 个 VapourSynth 环境测试跳过；img-base/img-scale2/img-clip/
+  img-glow/img-iglow/img-echo/img-fx 七个跨树 CSRI 帧逐字节一致；Windows
+  `Release (MOD)|x64` 解决方案构建通过。
+- 开发压力探针（640x360、20 个重叠全帧矢量事件、3 次取中位数，含进程启动
+  与 PNG 输出开销）约：`\1img` 2.68 s → 0.61 s，`\imgscale2` 2.73 s →
+  0.91 s；组合特效约 2.91 s → 2.72 s。数值随机器/构建波动，只能说明图像
+  采样路径大致数倍提速，不能当作用户可见渲染管线的严格 benchmark。
+- 内存探针（1024x1024 RGBA 内嵌 PNG，125 次 open/close）：最终跨平台 post-warm
+  增长约 16 KiB 且平台期稳定，Windows 约 40 KiB 平台期；持有 10 个实例约增加
+  42 MB（预期约 40 MiB 解码图像加实例开销），关闭后回到距基线几十 KiB。
+  结论是图像所有权已释放；单次 RSS 残余属于分配器/运行时驻留，不能脱离
+  重复 open 平台期直接解释为泄漏。截断 PNG 错误路径另行跑过 505 次 open/close，
+  Windows RSS 在首批后停于约 1.8 MiB 平台期而不是随次数增长（跨平台 105 次
+  约 16 KiB），说明 longjmp 错误清理没有持续泄漏像素块。
+
+## patch m027: 编辑器标签元数据文件（v1.19.0 / Windows v2.20.0，已完成）
+
+- 构建产物新增 `vsfiltermod-tags.json`：内容与 `csri_typesub_tags_json()`
+  导出的 UTF-8 JSON 逐字节一致，但以纯文件形式落在输出目录（cross 在
+  build 根目录，Windows 在 DLL 旁）。编辑器两个通道任选其一实现一次即可，
+  以后加标签编辑器零改动。
+- **架构**：csriapi.cpp 内嵌的 raw string JSON 仍是唯一权威来源；
+  `tools/extract_typesub_tags.py`（两树同步同一文件）构建时提取 payload、
+  json.loads 校验、结构校验（version=1/renderer/tags、name/signature/help
+  非空、无重名），**失败即构建失败**——损坏的清单绝不能静默发布。
+- **字节一致契约**：文件按 raw string payload 原样二进制写出，但先做
+  CRLF→LF 规范化——C++ translation phase 1 会把 raw string 内的行尾序列
+  统一映射为 `\n`，编译器嵌入的永远是 LF 形式，与 cpp 文件本身行尾无关。
+- **重大编码教训**：Windows 树 csriapi.cpp 无 BOM，MSVC 默认按系统代码页
+  （GBK）解读源文件，JSON 中文大多数字节对碰巧往返还原，但"于""）"等字
+  在 DLL 导出中损坏为 `?`——v1.4.0 引入该导出时就存在的预存 bug。
+  cross 树不受影响是因为 meson 编译带 `/utf-8`。修复：vcxproj 给
+  csriapi.cpp **单文件**加 `/utf-8`（不要全局加，避免改变其他文件既有
+  字面量的 execution charset 语义）。是 typesub-tags 端到端测试抓到这个
+  bug 的——文件与 DLL 导出字节比对值得永远保留。
+- **测试** tests/typesub_tags.py：文件==cpp payload 字节、结构校验、
+  ctypes 加载插件比对导出==文件（Windows 需 os.add_dll_directory 加
+  build root + subprojects 各一级子目录解析 freetype/libpng 依赖；
+  目录必须是绝对路径；加载失败返回 77=skip）。meson 全量 26 通过 1 跳过。
+- **构建集成**：meson 用 custom_target（input=csriapi.cpp，build_by_default，
+  无 python 时 warning 跳过）；MSBuild 在 4 个 ItemDefinitionGroup 加
+  PostBuildEvent 调 `tools\gen_typesub_tags.cmd`（python→py 探测链，
+  找不到 python 警告退出 0 不阻塞构建，提取失败 exit 1 失败构建）。
+  OutDir 带空格括号（`Release (MOD)`），传参必须加引号，`%~2` 去引号。
+- **转义陷阱再次命中**：用 python heredoc 给 vcxproj 写 `..\..\tools` 时
+  `\t` 变成 tab 字符写入 XML——chr(92) 字节拼接是唯一免疫法，写完必须
+  扫描控制字符验证。/tmp 在本机 bash 是 MSYS 路径而 Windows python 的
+  os.environ TEMP 是 Windows 路径，写构建 bat 要显式用 C:\Users\...\Temp。
 
 ## 候选史诗 2/3 备注
 - 打字机/逐字显现：\k 家族已覆盖逐字填充；真打字机（逐字出现+光标）
   语义上是新功能，需求证据不足，优先级降档。
-- 收尾项（随时可做）：性能 profile、两树渲染输出位级交叉验证、
-  csriapi 元数据完整性审计、README 示例图补全。
+- 收尾项（随时可做）：更广泛的性能 profile、更多标签的两树渲染输出位级
+  交叉验证、csriapi 元数据完整性审计、README 示例图补全。
