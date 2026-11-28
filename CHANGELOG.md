@@ -2,7 +2,7 @@
 
 **English** | [简体中文](CHANGELOG.zh-CN.md) | [日本語](CHANGELOG.ja.md) | [한국어](CHANGELOG.ko.md)
 
-## 1.18.0
+## 1.19.0
 
 ### Line-continuous image fills and `\imgscale`
 
@@ -240,7 +240,7 @@
   blur. The shadow / outline pass re-rasterizes the word overlay
   with the layer-specific radius added to the base `\blur` value,
   so the body can stay crisp while the shadow diffuses (or vice
-  versa). Both forms support compact syntax (`\shadblur4`), `	`
+  versa). Both forms support compact syntax (`\shadblur4`), `\t`
   animation, and zero disables the extra blur. TypeSub tag metadata
   includes the new tags.
 

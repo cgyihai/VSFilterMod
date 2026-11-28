@@ -1,6 +1,6 @@
 # 编译 VSFilterMod
 
-[English](BUILD.md) | **简体中文**
+[English](BUILD.md) | **简体中文** | [日本語](BUILD.ja.md) | [한국어](BUILD.ko.md)
 
 本项目编译出两样东西：
 

@@ -1,6 +1,6 @@
 # Building VSFilterMod
 
-**English** | [简体中文](BUILD.zh-CN.md)
+**English** | [简体中文](BUILD.zh-CN.md) | [日本語](BUILD.ja.md) | [한국어](BUILD.ko.md)
 
 VSFilterMod builds two things:
 

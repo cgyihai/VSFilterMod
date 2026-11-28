@@ -4,7 +4,7 @@
 [![License: GPL v2+](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)
 
-[English](README.md) | **简体中文**
+[English](README.md) | **简体中文** | [日本語](README.ja.md) | [한국어](README.ko.md)
 
 把 VSFilterMod 字幕渲染器移植到 **Windows、Linux 和 macOS**。
 编译产物是一个库，既是 Aegisub 用的 **CSRI** 插件，也是 **AviSynth+** 插件
@@ -138,6 +138,25 @@ vsfmrender --size 1920x1080 --fps 23.976 input.ass output.xml
 | `--font-report` | 列出字幕用到的每个字体实际解析到了哪个字体文件 |
 | `--strict-fonts` | 只要有字体被替换，就以退出码 3 失败 |
 | `-q, --quiet` | 不显示进度 |
+
+### 编辑器集成（标签元数据）
+
+字幕编辑器可以通过两个等价通道发现本渲染器的扩展标签（`\glow`、
+`\imgscale`、`\matte` 等），无需编辑器同步发版：
+
+- **文件**：每次构建都会在渲染器输出目录生成 `vsfiltermod-tags.json`
+  （Windows 下位于 `VSFilterMod.dll` 旁边）。文件是 UTF-8 JSON 文档
+  `{ "version": 1, "renderer": ..., "tags": [...] }`，每个标签带有
+  `name`、`signature` 和一行 `help` 注解。编辑器用普通文件读取即可把
+  标签数组合并进自动补全。
+- **插件导出**：动态库同时导出
+  `const char *csri_typesub_tags_json(void)`，返回完全相同的文档，
+  适合偏好在加载插件后用 `GetProcAddress`/`dlsym` 查找符号的编辑器。
+
+两个通道内容逐字节一致（由测试套件验证），编辑器只需任选其一实现
+**一次**。此后渲染器构建新增或更新标签时，只需替换新的二进制（或新的
+JSON 文件），编辑器无需任何配套更新。未知的或缺失的元数据应当直接
+忽略：文件和导出符号都是可选的，`version` 字段留作格式演进。
 
 ### 特效包（\glowc、\glowa、\iglow、\mblur、\bevel、\clipf）
 

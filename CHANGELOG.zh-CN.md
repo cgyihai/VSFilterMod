@@ -2,7 +2,7 @@
 
 [English](CHANGELOG.md) | **简体中文** | [日本語](CHANGELOG.ja.md) | [한국어](CHANGELOG.ko.md)
 
-## 1.18.0
+## 1.19.0
 
 ### 行级连续图像填充与 `\imgscale`
 
@@ -179,7 +179,7 @@
 - `\shadblur(radius)` / `\bordblur(radius)`：分层高斯羽化。阴影/
   描边 pass 以该层专属半径加算基础 `\blur` 重光栅化字形覆盖层，
   正文可保持锐利而阴影扩散（或反之）。支持紧凑写法
-  （`\shadblur4`）、`	` 动画，零值关闭额外羽化。TypeSub 标签
+  （`\shadblur4`）、`\t` 动画，零值关闭额外羽化。TypeSub 标签
   元数据已包含新标签。
 
 - `\persp(dist)`：`\frx`/`\fry` 旋转的真透视相机距离（输出像素）。

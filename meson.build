@@ -1,5 +1,5 @@
 project('vsfiltermod', 'c', 'cpp',
-    version : '1.18.0',
+    version : '1.19.0',
     license : 'GPL-2.0-or-later',
     meson_version : '>=0.59.0',
     default_options : [
@@ -246,6 +246,26 @@ csri_lib = shared_library('vsfiltermod',
     install : true,
     install_dir : get_option('libdir') / 'csri')
 
+# TypeSub editor tag metadata. The plugin exports csri_typesub_tags_json()
+# for editors that load it, and the identical JSON document is emitted as a
+# plain file so editors can discover this build's extension tags with simple
+# file IO instead. Editors read whichever channel they prefer once; adding a
+# tag never requires a synchronous editor release. The extraction script
+# validates the embedded document and fails the build on malformed JSON.
+typesub_tags_py = find_program('python3', 'python', required : false)
+if typesub_tags_py.found()
+    typesub_tags_json = custom_target('vsfiltermod-tags',
+        input : files('src/vsfilter/csriapi.cpp'),
+        output : 'vsfiltermod-tags.json',
+        command : [typesub_tags_py, files('tools/extract_typesub_tags.py'),
+                   '@INPUT@', '@OUTPUT@'],
+        build_by_default : true,
+        install : true,
+        install_dir : get_option('libdir') / 'csri')
+else
+    warning('python not found: vsfiltermod-tags.json will not be generated')
+endif
+
 # ---------------------------------------------------------------------------
 # BDN+XML writer
 # ---------------------------------------------------------------------------
@@ -267,6 +287,17 @@ if get_option('tests')
     test('csri-abi', csri_loader_test,
          args : [csri_lib.full_path()],
          depends : [csri_lib])
+
+    if typesub_tags_py.found()
+        test('typesub-tags', typesub_tags_py,
+             args : [files('tests/typesub_tags.py'),
+                     typesub_tags_json.full_path(),
+                     files('src/vsfilter/csriapi.cpp'),
+                     csri_lib.full_path(),
+                     meson.current_build_dir()],
+             depends : [typesub_tags_json, csri_lib],
+             timeout : 60)
+    endif
 
     det_float_test = executable('det_float_test',
         files('tests/det_float_test.cpp', 'src/compat/det_float.cpp',

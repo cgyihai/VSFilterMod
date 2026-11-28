@@ -4,7 +4,7 @@
 [![License: GPL v2+](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)
 
-**English** | [简体中文](README.zh-CN.md)
+**English** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
 A port of the VSFilterMod subtitle renderer to **Windows, Linux and macOS**.
 It ships as one library that is a **CSRI** plugin for Aegisub, an
@@ -148,6 +148,29 @@ vsfmrender --size 1920x1080 --fps 23.976 input.ass output.xml
 | `--font-report` | List what every font the script uses resolved to |
 | `--strict-fonts` | Exit with status 3 if any font had to be substituted |
 | `-q, --quiet` | No progress output |
+
+### Editor integration (tag metadata)
+
+Subtitle editors can discover this renderer's extension tags (`\glow`,
+`\imgscale`, `\matte`, ...) without a synchronous editor release, through
+two equivalent channels:
+
+- **File**: every build writes `vsfiltermod-tags.json` next to the renderer
+  outputs (beside `VSFilterMod.dll` on Windows). The file is a UTF-8 JSON
+  document `{ "version": 1, "renderer": ..., "tags": [...] }` where each tag
+  carries `name`, `signature` and a one-line `help` string. An editor can
+  merge the array into its autocompletion with plain file IO.
+- **Plugin export**: the library also exports
+  `const char *csri_typesub_tags_json(void)`, returning the identical
+  document for editors that prefer `GetProcAddress`/`dlsym` lookup after
+  loading the plugin.
+
+Both channels are byte-identical (verified by the test suite), so an editor
+only has to implement whichever one is more convenient — once. When a later
+renderer build adds or updates tags, dropping in the new binary (or the new
+JSON file) is enough; the editor never needs a matching update. Unknown or
+missing metadata should simply be ignored: the file and the export symbol
+are both optional, and `version` allows format evolution.
 
 ### Effect package (\glowc, \glowa, \iglow, \mblur, \bevel, \clipf)
 
