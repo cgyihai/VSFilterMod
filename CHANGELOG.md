@@ -2,6 +2,14 @@
 
 **English** | [简体中文](CHANGELOG.zh-CN.md) | [日本語](CHANGELOG.ja.md) | [한국어](CHANGELOG.ko.md)
 
+## 1.19.2
+
+### Packaging
+
+- Release archives now include `vsfiltermod-tags.json` beside the plugin
+  and `vsfmrender`, so the editor tag manifest ships with every platform
+  binary (including the macOS universal bundle).
+
 ## 1.19.1
 
 ### Bug fixes

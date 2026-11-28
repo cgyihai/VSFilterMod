@@ -1,5 +1,5 @@
 project('vsfiltermod', 'c', 'cpp',
-    version : '1.19.1',
+    version : '1.19.2',
     license : 'GPL-2.0-or-later',
     meson_version : '>=0.59.0',
     default_options : [

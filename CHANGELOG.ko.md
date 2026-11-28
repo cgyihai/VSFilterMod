@@ -2,6 +2,14 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md) | [日本語](CHANGELOG.ja.md) | **한국어**
 
+## 1.19.2
+
+### 패키징
+
+- 릴리스 아카이브에 이제 플러그인과 `vsfmrender` 옆에
+  `vsfiltermod-tags.json`이 포함됩니다. 모든 플랫폼 바이너리
+  (macOS universal 포함)에 편집기 태그 매니페스트가 함께 제공됩니다.
+
 ## 1.19.1
 
 ### 버그 수정

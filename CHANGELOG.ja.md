@@ -2,6 +2,14 @@
 
 [English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md) | **日本語** | [한국어](CHANGELOG.ko.md)
 
+## 1.19.2
+
+### パッケージング
+
+- リリースアーカイブに `vsfiltermod-tags.json` をプラグインと `vsfmrender`
+  の隣に同梱するようになりました。すべてのプラットフォーム向けバイナリ
+  （macOS universal を含む）にエディタ用タグマニフェストが付属します。
+
 ## 1.19.1
 
 ### バグ修正

@@ -2,6 +2,13 @@
 
 [English](CHANGELOG.md) | **简体中文** | [日本語](CHANGELOG.ja.md) | [한국어](CHANGELOG.ko.md)
 
+## 1.19.2
+
+### 打包
+
+- 发布压缩包现在在插件与 `vsfmrender` 旁边附带 `vsfiltermod-tags.json`，
+  所有平台二进制（含 macOS universal 包）都附带编辑器标签清单。
+
 ## 1.19.1
 
 ### 缺陷修复

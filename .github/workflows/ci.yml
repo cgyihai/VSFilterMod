@@ -262,6 +262,7 @@ jobs:
           mkdir -p dist
           cp "${{ matrix.plugin }}" dist/
           cp "${{ matrix.renderer }}" dist/
+          cp build/vsfiltermod-tags.json dist/
           cp out/smoke.xml dist/
           ls -la dist/
 
@@ -295,6 +296,7 @@ jobs:
             chmod +x dist/$f
             lipo -archs dist/$f
           done
+          cp artifacts/vsfiltermod-macos-arm64/vsfiltermod-tags.json dist/
           dist/vsfmrender --version
 
       - name: Check
@@ -361,6 +363,7 @@ jobs:
           mkdir -p dist
           cp build/vsfiltermod.dll dist/
           cp build/src/bdnxml/vsfmrender.exe dist/
+          cp build/vsfiltermod-tags.json dist/
           cp out/smoke.xml dist/
           ls -la dist/
 
