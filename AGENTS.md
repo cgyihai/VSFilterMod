@@ -328,6 +328,26 @@ edit/write 工具直写，或 python 里用 chr(92) 拼接。写完用控制字�
   扫描控制字符验证。/tmp 在本机 bash 是 MSYS 路径而 Windows python 的
   os.environ TEMP 是 Windows 路径，写构建 bat 要显式用 C:\Users\...\Temp。
 
+
+## v1.19.1 / Windows v2.20.1.0：POSIX 路径分隔符修复（已完成）
+
+- **CI 全红根因**：RTS.cpp 对 `\1img`–`\4img` 的 fpath 计算只用
+  `m_path.ReverseFind('\\')`——POSIX 下返回 -1、fpath 为空、相对文件名
+  退化为进程工作目录→PNG 加载失败→mode[i] 不为 2→纯色填充→img 测试
+  全部断言失败。修复：取 `\\` 和 `/` 两者的较大索引。测试把 tex.png 写在
+  workdir、但 vsfmrender 的 CWD 是 meson build 目录，不同目录才暴露此 bug。
+  教训：跨平台树的所有路径拆分不能只找 `\\`。
+- 类似隐患位置已查：cross 树仅剩 param.Find('\\') 一处（标签参数解析非路径）。
+- **MinGW 警告无害**："rsrc merge failure: duplicate leaf: type: 10
+  (VERSION) name: 1 lang: 409" 是 binutils ld 合并 .rsrc 节时的警告，
+  链接仍成功且测试正常跑——不用追。
+- **ASan 下 ctypes 不可达**：带插桩的 .so 被 dlopen 进未插桩的 python 时
+  ASan runtime 直接 abort，进程级退出、ctypes 无法捕获。typesub_tags.py
+  现在检测到 ASAN_OPTIONS/MSAN_OPTIONS/LSAN_OPTIONS 时跳过端到端检查
+  （文件==cpp 字节与结构校验仍跑，返回 0 非 77）。
+- **同一陷阱第三次命中**：python heredoc 里 `\1`/`\4`/`\`` 都被吃掉成
+  控制字符。本节的教训：写含 `\tag` 字面量的中文段落必须用 edit/write 工具。
+
 ## 候选史诗 2/3 备注
 - 打字机/逐字显现：\k 家族已覆盖逐字填充；真打字机（逐字出现+光标）
   语义上是新功能，需求证据不足，优先级降档。
