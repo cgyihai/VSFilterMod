@@ -2,7 +2,7 @@
 
 **English** | [简体中文](CHANGELOG.zh-CN.md) | [日本語](CHANGELOG.ja.md) | [한국어](CHANGELOG.ko.md)
 
-## 1.17.0
+## 1.18.0
 
 ### Line-continuous image fills and `\imgscale`
 

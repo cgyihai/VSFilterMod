@@ -2,7 +2,7 @@
 
 [English](CHANGELOG.md) | **简体中文** | [日本語](CHANGELOG.ja.md) | [한국어](CHANGELOG.ko.md)
 
-## 1.17.0
+## 1.18.0
 
 ### 行级连续图像填充与 `\imgscale`
 

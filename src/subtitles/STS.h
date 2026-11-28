@@ -53,6 +53,15 @@ public:
 
 #ifdef _VSMOD // patch m010. png background
 #include <png.h>
+/* Decoded PNG storage is shared by the subtitle image cache, styles and word
+ * copies. Rows index one contiguous pixel allocation; the row table remains
+ * because libpng needs it while decoding and the sampler already uses it. */
+struct MOD_PNGPIXELS
+{
+    std::vector<png_bytep> rows;
+    std::vector<BYTE> data;
+};
+
 class MOD_PNGIMAGE
 {
 public:
@@ -69,6 +78,10 @@ public:
     png_byte color_type;
     png_byte bit_depth;
 
+    /* `pointer` is a non-owning alias into pixels->rows. Copies of
+     * MOD_PNGIMAGE share ownership through `pixels`, so the alias remains
+     * valid until the last copy is destroyed or explicitly reloaded. */
+    std::shared_ptr<MOD_PNGPIXELS> pixels;
     png_bytep*	pointer;
 
     MOD_PNGIMAGE();
@@ -394,7 +407,7 @@ public:
 
 #ifdef _VSMOD
     CString m_resPath;
-    CAtlArray<MOD_PNGIMAGE> mod_images;
+    std::vector<MOD_PNGIMAGE> mod_images;
 
     // index array, for fast speed
     DWORD   ind_size; // size of array

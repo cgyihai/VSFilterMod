@@ -1411,7 +1411,7 @@ bool CSimpleTextSubtitle::LoadEfile(CString& img, CString m_fn)
     MOD_PNGIMAGE t_temp;
     if(t_temp.initImage(pData.m_p, (size_t)datalen, m_fn)) // save path
     {
-        mod_images.Add(t_temp);
+        mod_images.push_back(t_temp);
     }
     return(true);
 }
@@ -2184,7 +2184,11 @@ void CSimpleTextSubtitle::Empty()
     RemoveAll();
     m_sver = 3;
 
-#ifdef _VSMOD // indexing
+#ifdef _VSMOD
+    /* Drop the filename cache as well as the styles. Cached subtitles are
+     * already gone in CRenderedTextSubtitle::Empty(), so this normally drops
+     * the last shared reference to decoded PNG pixels. */
+    mod_images.clear();
 #ifdef INDEXING
     if(ind_size>0)
     {
@@ -3720,7 +3724,7 @@ bool MOD_PNGIMAGE::operator == (MOD_PNGIMAGE& png)
 
 bool MOD_PNGIMAGE::processData(png_structp png_ptr, png_infop info_ptr)
 {
-    if (setjmp(png_jmpbuf(png_ptr))) return false;
+    if (setjmp(png_jmpbuf(png_ptr))) { freeImage(); return false; }
 
     png_set_sig_bytes(png_ptr, 8);
     png_read_info(png_ptr, info_ptr);
@@ -3753,15 +3757,35 @@ bool MOD_PNGIMAGE::processData(png_structp png_ptr, png_infop info_ptr)
     const png_size_t rowbytes = png_get_rowbytes(png_ptr, info_ptr);
     bpp = (int)(rowbytes / (png_size_t)width);
 
-    pointer = (png_bytep*)calloc((size_t)height, sizeof(png_bytep));
-    if (!pointer) return false;
+    if ((size_t)height > (size_t)-1 / (size_t)rowbytes) return false;
 
-    for (int y = 0; y < height; y++) {
-        pointer[y] = (png_byte*)malloc(rowbytes);
-        if (!pointer[y]) { freeImage(); return false; }
+    /* Keep the decoded rows contiguous. Besides reducing thousands of small
+     * allocations for large textures, this gives the sampler better memory
+     * locality. Ownership is shared: mod_images, styles and rasterized word
+     * copies all reference the same allocation safely. */
+    freeImage();
+    MOD_PNGPIXELS* newPixels = new (std::nothrow) MOD_PNGPIXELS;
+    if (!newPixels) return false;
+
+    try
+    {
+        newPixels->data.resize((size_t)rowbytes * (size_t)height);
+        newPixels->rows.resize((size_t)height);
+    }
+    catch (...)
+    {
+        delete newPixels;
+        return false;
     }
 
-    png_read_image(png_ptr, pointer);
+    for (int y = 0; y < height; y++)
+        newPixels->rows[(size_t)y] = newPixels->data.data() + (size_t)rowbytes * (size_t)y;
+
+    /* libpng reports decode errors by longjmp, bypassing local C++ owners.
+     * Transfer ownership to the member before entering png_read_image. */
+    pixels.reset(newPixels);
+    pointer = pixels->rows.data();
+    png_read_image(png_ptr, pixels->rows.data());
     return true;
 }
 
@@ -3837,14 +3861,11 @@ bool MOD_PNGIMAGE::initImage(BYTE* data, size_t len, CString m_fn)
 
 void MOD_PNGIMAGE::freeImage()
 {
-    /* The rows and the row table both come from malloc; the original paired
-     * them with delete[], which is undefined behaviour and did crash on some
-     * allocators. */
-    if (pointer != NULL) {
-        for (int y = 0; y < height; y++) free(pointer[y]);
-        free(pointer);
-        pointer = NULL;
-    }
+    /* Other MOD_PNGIMAGE copies may still reference the same decoded pixels;
+     * resetting only drops this reference. The shared storage releases the
+     * contiguous block and row table when the last copy goes away. */
+    pixels.reset();
+    pointer = NULL;
 }
 
 MOD_GRADIENT::MOD_GRADIENT()

@@ -69,10 +69,11 @@ struct GlowCanvas
 {
     int w = 0;
     int h = 0;
-    std::vector<unsigned int> pixels;
+    std::vector<unsigned int>& pixels;
     SubPicDesc desc;
 
-    GlowCanvas(int width, int height) : w(width), h(height)
+    GlowCanvas(int width, int height, std::vector<unsigned int>& storage)
+        : w(width), h(height), pixels(storage)
     {
         pixels.assign((size_t)w * h, 0xff000000); // pixmix uses inverted alpha
         memset(&desc, 0, sizeof(desc));
@@ -207,9 +208,16 @@ static void CompositeMattedCanvas(const std::vector<unsigned int>& scratch, cons
 struct GlowPlane16
 {
     int ox = 0, oy = 0, w = 0, h = 0;
-    std::vector<uint16_t> pixels;
-    std::vector<uint16_t> work;
-    std::vector<uint32_t> acc;
+    std::vector<uint16_t>& pixels;
+    std::vector<uint16_t>& work;
+    std::vector<uint32_t>& acc;
+
+    GlowPlane16(std::vector<uint16_t>& pixelStorage,
+                std::vector<uint16_t>& workStorage,
+                std::vector<uint32_t>& accStorage)
+        : pixels(pixelStorage), work(workStorage), acc(accStorage)
+    {
+    }
 
     void Setup(int x, int y, int width, int height)
     {
@@ -2823,6 +2831,17 @@ bool CRenderedTextSubtitle::Init(CSize size, CRect vidrect)
     return(true);
 }
 
+void CRenderedTextSubtitle::ReleaseRenderingScratch()
+{
+    std::vector<unsigned int>().swap(m_scratchEventPixels);
+    std::vector<unsigned int>().swap(m_scratchGlowCanvasPixels);
+    std::vector<uint16_t>().swap(m_scratchGlowPixels);
+    std::vector<uint16_t>().swap(m_scratchGlowWork);
+    std::vector<uint32_t>().swap(m_scratchGlowAcc);
+    m_matteScratchPool.clear();
+    m_matteScratchUsed = 0;
+}
+
 void CRenderedTextSubtitle::Deinit()
 {
     POSITION pos = m_subtitleCache.GetStartPosition();
@@ -2837,6 +2856,8 @@ void CRenderedTextSubtitle::Deinit()
     m_subtitleCache.RemoveAll();
 
     m_sla.Empty();
+
+    ReleaseRenderingScratch();
 
     m_size = CSize(0, 0);
     m_vidrect.SetRectEmpty();
@@ -3544,7 +3565,7 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
 
                     bool t_init = false;
                     // buffer
-                    for(ptrdiff_t k = 0, j = mod_images.GetCount(); k < j; k++)
+                    for(ptrdiff_t k = 0, j = (ptrdiff_t)mod_images.size(); k < j; k++)
                     {
                         MOD_PNGIMAGE t_temp = mod_images[k];
                         if(t_temp.filename == params[0]) // found buffered image
@@ -3572,14 +3593,14 @@ bool CRenderedTextSubtitle::ParseSSATag(CSubtitle* sub, CStringW str, STSStyle& 
                         {
                             style.mod_grad.mode[i] = 2;
                             style.mod_grad.b_images[i] = t_temp;
-                            mod_images.Add(t_temp);
+                            mod_images.push_back(t_temp);
                         }
                         else
                         if(t_temp.initImage(fpath + params[0])) // path + relative path
                         {
                             style.mod_grad.mode[i] = 2;
                             style.mod_grad.b_images[i] = t_temp;
-                            mod_images.Add(t_temp);
+                            mod_images.push_back(t_temp);
                         }
                     }
                 }
@@ -5267,10 +5288,16 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
         bool inverse = false;
         int targetOffset = 1;
         bool hasCoverage = false;
-        std::vector<unsigned int> pixels;
-        std::vector<BYTE> coverage;
+        std::vector<unsigned int>* pixels = NULL;
+        std::vector<BYTE>* coverage = NULL;
     };
     std::map<int, MatteLayerState> matteLayers;
+    /* Matte canvases are semantic per-frame state, but their backing storage
+     * can be reused. Acquisition restarts from the first pool slot for every
+     * Render() call; a slot is fully reset before a layer uses it. */
+    m_matteScratchUsed = 0;
+    bool usedEventScratch = false;
+    bool usedGlowScratch = false;
 #endif
 
     if(m_size != CSize(spd.w * 8, spd.h * 8) || m_vidrect != CRect(spd.vidrect.left * 8, spd.vidrect.top * 8, spd.vidrect.right * 8, spd.vidrect.bottom * 8))
@@ -5282,7 +5309,11 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 //    TRACE(_T("search started: %d"), t);
     const STSSegment* stss = SearchSubs(t, fps, &segment);
 //    TRACE(_T("search complete: %d"), t);
-    if(!stss) return S_FALSE;
+    if(!stss)
+    {
+        ReleaseRenderingScratch();
+        return S_FALSE;
+    }
 
     // clear any cached subs that current position is not in its bounds
     {
@@ -5346,18 +5377,25 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
         const bool isMatteEvent = (s->m_matteMode != 0);
         const MatteLayerState* consumeMatte = NULL;
         MatteLayerState* myMatteState = NULL;
-        std::vector<unsigned int> evtPixels;
+        std::vector<unsigned int>& evtPixels = m_scratchEventPixels;
+        evtPixels.clear();
         if(isMatteEvent)
         {
             MatteLayerState& ms = matteLayers[subs[i].layer];
-            if(ms.pixels.empty())
+            if(!ms.pixels)
             {
-                ms.pixels.assign((size_t)spd.w * spd.h, 0xff000000);
+                if(m_matteScratchUsed >= m_matteScratchPool.size())
+                    m_matteScratchPool.push_back(std::unique_ptr<MatteScratchBuffers>(new MatteScratchBuffers));
+                MatteScratchBuffers& buffers = *m_matteScratchPool[m_matteScratchUsed++];
+                buffers.pixels.assign((size_t)spd.w * spd.h, 0xff000000);
+                buffers.coverage.clear();
+                ms.pixels = &buffers.pixels;
+                ms.coverage = &buffers.coverage;
                 ms.inverse = (s->m_matteMode == 2);
                 ms.targetOffset = s->m_matteOffset;
             }
             myMatteState = &ms;
-            tspd.bits = (BYTE*)ms.pixels.data();
+            tspd.bits = (BYTE*)ms.pixels->data();
             tspd.pitch = spd.w * 4;
             ptbbox = &localBBox;
         }
@@ -5374,6 +5412,7 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
             if(consumeMatte || s->m_echoCount > 0)
             {
                 evtPixels.assign((size_t)spd.w * spd.h, 0xff000000);
+                usedEventScratch = true;
                 tspd.bits = (BYTE*)evtPixels.data();
                 tspd.pitch = spd.w * 4;
                 ptbbox = &localBBox;
@@ -5759,7 +5798,8 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
             const int glowRadius = glowIt->radius;
             const int glowStrengthQ8 = glowIt->strengthQ8;
             const int blurRadius = (std::min)(glowRadius, (std::max)(tspd.w, tspd.h));
-            GlowCanvas glowCanvas(tspd.w, tspd.h);
+            usedGlowScratch = true;
+            GlowCanvas glowCanvas(tspd.w, tspd.h, m_scratchGlowCanvasPixels);
             CRect glowSourceBBox(0, 0, 0, 0);
 
             const auto paintGlowSource = [&](CRect& sourceClipRect)
@@ -5805,7 +5845,7 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
             if(glowRect.bottom > tspd.h) glowRect.bottom = tspd.h;
             if(glowRect.IsRectEmpty()) continue;
 
-            GlowPlane16 plane;
+            GlowPlane16 plane(m_scratchGlowPixels, m_scratchGlowWork, m_scratchGlowAcc);
             plane.Setup(glowRect.left, glowRect.top,
                         glowRect.right - glowRect.left, glowRect.bottom - glowRect.top);
 
@@ -5996,7 +6036,8 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
         for(size_t ip = 0; ip < iglowPasses.size(); ip++)
         {
             const IGlowPass& pass = iglowPasses[ip];
-            GlowCanvas iglowCanvas(tspd.w, tspd.h);
+            usedGlowScratch = true;
+            GlowCanvas iglowCanvas(tspd.w, tspd.h, m_scratchGlowCanvasPixels);
             CRect iglowCoverageBox(0, 0, 0, 0);
 
             const auto paintIGlowSource = [&](CRect& sourceClipRect)
@@ -6041,7 +6082,7 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
             if(iglowRect.bottom > tspd.h) iglowRect.bottom = tspd.h;
             if(iglowRect.IsRectEmpty()) continue;
 
-            GlowPlane16 plane;
+            GlowPlane16 plane(m_scratchGlowPixels, m_scratchGlowWork, m_scratchGlowAcc);
             plane.Setup(iglowRect.left, iglowRect.top,
                         iglowRect.right - iglowRect.left, iglowRect.bottom - iglowRect.top);
             LoadInvertedCoverage16(plane, iglowCanvas);
@@ -6195,12 +6236,12 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
             /* the canvas accumulates every matte event on this layer; the
              * extraction is a pure function of the canvas, so re-extracting
              * after each event keeps the union coverage current */
-            ExtractMatteCoverage(myMatteState->pixels, myMatteState->coverage, myMatteState->inverse);
+            ExtractMatteCoverage(*myMatteState->pixels, *myMatteState->coverage, myMatteState->inverse);
             myMatteState->hasCoverage = true;
         }
         else if(consumeMatte && !evtPixels.empty())
         {
-            CompositeMattedCanvas(evtPixels, consumeMatte->coverage, spd, localBBox);
+            CompositeMattedCanvas(evtPixels, *consumeMatte->coverage, spd, localBBox);
             CRect clipped(localBBox);
             if(clipped.left < 0) clipped.left = 0;
             if(clipped.top < 0) clipped.top = 0;
@@ -6246,6 +6287,25 @@ HRESULT CRenderedTextSubtitle::Render(SubPicDesc& spd, REFERENCE_TIME rt, double
 
         //delete s;
     }
+
+#ifdef _VSMOD
+    /* Keep scratch memory only while the feature that needs it is still being
+     * rendered. This preserves allocation reuse for active effects without
+     * pinning full-frame buffers after a matte/echo/glow section ends. */
+    if(!usedEventScratch)
+        std::vector<unsigned int>().swap(m_scratchEventPixels);
+    if(!usedGlowScratch)
+    {
+        std::vector<unsigned int>().swap(m_scratchGlowCanvasPixels);
+        std::vector<uint16_t>().swap(m_scratchGlowPixels);
+        std::vector<uint16_t>().swap(m_scratchGlowWork);
+        std::vector<uint32_t>().swap(m_scratchGlowAcc);
+    }
+    if(m_matteScratchUsed == 0)
+        m_matteScratchPool.clear();
+    else if(m_matteScratchPool.size() > m_matteScratchUsed)
+        m_matteScratchPool.resize(m_matteScratchUsed);
+#endif
 
     bbox = bbox2;
 

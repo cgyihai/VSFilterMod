@@ -277,6 +277,25 @@ class CRenderedTextSubtitle : public CSimpleTextSubtitle
 
     CScreenLayoutAllocator m_sla;
 
+    /* Rendering scratch retained for the lifetime of one subtitle instance.
+     * These buffers contain no semantic state between frames; reusing their
+     * capacity avoids allocating several full-frame or large ROI buffers for
+     * every event/frame. Deinit releases them again. */
+    struct MatteScratchBuffers
+    {
+        std::vector<unsigned int> pixels;
+        std::vector<BYTE> coverage;
+    };
+    std::vector<unsigned int> m_scratchEventPixels;
+    std::vector<unsigned int> m_scratchGlowCanvasPixels;
+    std::vector<uint16_t> m_scratchGlowPixels;
+    std::vector<uint16_t> m_scratchGlowWork;
+    std::vector<uint32_t> m_scratchGlowAcc;
+    std::vector<std::unique_ptr<MatteScratchBuffers> > m_matteScratchPool;
+    size_t m_matteScratchUsed = 0;
+
+    void ReleaseRenderingScratch();
+
     CSize m_size;
     CRect m_vidrect;
 
